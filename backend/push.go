@@ -56,6 +56,12 @@ func registerNotesPushHooks(app *pocketbase.PocketBase, getVapid func() *vapidKe
 	app.OnRecordAfterDeleteSuccess("notes").BindFunc(notify)
 }
 
+// pushHTTPClient overrides the HTTP client webpush.SendNotification uses -
+// nil in production (webpush-go then falls back to a real *http.Client),
+// swapped out in tests so they can assert on fanOutPush's response
+// handling (e.g. stale-subscription cleanup) without a real network call.
+var pushHTTPClient webpush.HTTPClient
+
 // fanOutPush sends payload to every registered device. A single device's
 // subscription being invalid/expired must not stop delivery to the rest,
 // so failures are logged and skipped rather than propagated - this runs
@@ -69,6 +75,7 @@ func fanOutPush(app core.App, payload []byte, vapid *vapidKeyPair) {
 	}
 
 	options := &webpush.Options{
+		HTTPClient:      pushHTTPClient,
 		Subscriber:      vapidSubject(),
 		VAPIDPublicKey:  vapid.PublicKey,
 		VAPIDPrivateKey: vapid.PrivateKey,

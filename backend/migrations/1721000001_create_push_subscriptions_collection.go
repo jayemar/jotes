@@ -12,6 +12,14 @@ import (
 // device even while its app isn't open (see UnifiedPush integration).
 func init() {
 	m.Register(func(app core.App) error {
+		// No historical version of this collection exists (unlike notes,
+		// see 1721000000_create_notes_collection.go), so this shouldn't be
+		// reachable in practice - guarded anyway so a manually re-run or
+		// otherwise duplicated migration can't fail on a name collision.
+		if _, err := app.FindCollectionByNameOrId("push_subscriptions"); err == nil {
+			return nil
+		}
+
 		users, err := app.FindCollectionByNameOrId("users")
 		if err != nil {
 			return err
