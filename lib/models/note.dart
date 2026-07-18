@@ -48,6 +48,16 @@ class Note {
   final DateTime created;
   final DateTime updated;
 
+  /// Only ever meaningful on a [Note] fetched via [Note.fromPocketBase]
+  /// during a sync merge (see SyncNotifier.mergeSync) - a tombstone rather
+  /// than a real delete, so a device that was offline when another device
+  /// deleted this note can tell "this was deleted after I last saw it"
+  /// apart from "this note was never synced to begin with", which a hard
+  /// delete is indistinguishable from. Local storage (DbService) never
+  /// persists a deleted note at all, so this is always false for a [Note]
+  /// built from [Note.fromMap].
+  final bool deleted;
+
   const Note({
     required this.id,
     this.title = '',
@@ -56,6 +66,7 @@ class Note {
     this.reminderAt,
     required this.created,
     required this.updated,
+    this.deleted = false,
   });
 
   bool get isEmpty => title.isEmpty && body.isEmpty && reminderAt == null;
@@ -108,6 +119,10 @@ class Note {
         'body': body,
         'color_index': colorIndex,
         'reminder_at': reminderAt?.toUtc().toIso8601String() ?? '',
+        // A local note is by definition active, not a tombstone - pushing
+        // one up (e.g. from mergeSync's local-is-newer branch) must always
+        // clear a stale remote tombstone rather than leave it set.
+        'deleted': false,
       };
 
   factory Note.fromPocketBase(Map<String, dynamic> r) {
@@ -127,6 +142,7 @@ class Note {
       updated: r['updated'] != null
           ? DateTime.parse(r['updated'] as String).toLocal()
           : now,
+      deleted: r['deleted'] == true,
     );
   }
 }

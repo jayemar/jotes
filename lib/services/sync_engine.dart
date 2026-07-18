@@ -22,7 +22,11 @@ Future<void> mergeSync() async {
   for (final r in remote) {
     final l = localById[r.id];
     if (l == null || l.updated.isBefore(r.updated)) {
-      await DbService.instance.upsert(r);
+      if (r.deleted) {
+        await DbService.instance.delete(r.id);
+      } else {
+        await DbService.instance.upsert(r);
+      }
     }
   }
 

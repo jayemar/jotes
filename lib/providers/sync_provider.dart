@@ -96,7 +96,13 @@ class SyncNotifier extends Notifier<SyncState> {
   Future<void> _handleRemoteEvent(String action, Note? note) async {
     if (note == null) return;
 
-    if (action == 'delete') {
+    // A user-initiated delete now arrives as an 'update' event carrying
+    // deleted:true (soft-delete via PbService.delete - see its own
+    // comment for why), not PocketBase's own 'delete' action, though that
+    // native action is still handled the same way in case a record is
+    // ever actually hard-deleted some other way (e.g. directly in the
+    // admin dashboard).
+    if (action == 'delete' || note.deleted) {
       await DbService.instance.delete(note.id);
       try {
         await NotificationService.instance.cancel(note.notificationId);

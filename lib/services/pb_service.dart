@@ -97,10 +97,16 @@ class PbService {
     }
   }
 
+  /// Soft-deletes: marks the record as [Note.deleted] rather than actually
+  /// removing it. A hard delete would make "remote has no record for this
+  /// id" indistinguishable from "this note was never synced yet" during a
+  /// mergeSync - which is exactly what let a device that was offline at
+  /// delete time push its stale local copy right back up once it
+  /// reconnected, undoing the delete. See SyncNotifier.mergeSync.
   Future<void> delete(String id) async {
     if (!isLoggedIn) return;
     try {
-      await _client!.collection('notes').delete(id);
+      await _client!.collection('notes').update(id, body: {'deleted': true});
     } on ClientException catch (e) {
       if (e.statusCode != 404) rethrow;
     }

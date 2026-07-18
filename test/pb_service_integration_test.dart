@@ -89,7 +89,13 @@ void main() {
       expect(matches.single.title, 'After');
     });
 
-    test('delete removes the record from fetchAll', () async {
+    test('delete soft-deletes: the record stays in fetchAll but marked '
+        'deleted, rather than actually disappearing', () async {
+      // A hard delete would make "remote has no record for this id"
+      // indistinguishable from "never synced yet" during a mergeSync,
+      // which is exactly what let an offline device's stale local copy
+      // get pushed back up and undo the delete - see PbService.delete's
+      // own comment, and mergeSync in sync_engine.dart.
       await PbService.instance.connect(_testServerUrl);
       await PbService.instance.register(
         'test-${_uuid.v4()}@example.com',
@@ -105,10 +111,9 @@ void main() {
 
       await PbService.instance.delete(note.id);
 
-      expect(
-        (await PbService.instance.fetchAll()).map((n) => n.id),
-        isNot(contains(note.id)),
-      );
+      final afterDelete = await PbService.instance.fetchAll();
+      expect(afterDelete.map((n) => n.id), contains(note.id));
+      expect(afterDelete.firstWhere((n) => n.id == note.id).deleted, isTrue);
     });
 
     test('a reminder round-trips through the server correctly', () async {

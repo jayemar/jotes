@@ -147,4 +147,45 @@ void main() {
     final localAfter = await DbService.instance.getById(newerRemoteId);
     expect(localAfter!.title, 'Fresh server copy');
   });
+
+  test('a note deleted on another device while this one was offline is '
+      'removed locally on reconnect, not resurrected by pushing the stale '
+      'local copy back up', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final noteId = _uuid.v4();
+    final email = 'test-${_uuid.v4()}@example.com';
+
+    // Seed the note as already synced before this device went offline:
+    // present both locally and on the server.
+    await PbService.instance.connect(_testServerUrl);
+    await PbService.instance.register(email, 'password123');
+    await PbService.instance.upsert(_note(id: noteId, title: 'Shared note'));
+    await DbService.instance.upsert(_note(id: noteId, title: 'Shared note'));
+
+    // Another device deletes it while this one is offline - done directly
+    // via PbService, bypassing this "device"'s local DB, exactly like a
+    // delete it never saw happen.
+    await PbService.instance.delete(noteId);
+    await PbService.instance.disconnect();
+
+    // This device reconnects and reconciles, still holding its stale
+    // local copy.
+    await container.read(syncProvider.notifier).connect(
+          url: _testServerUrl,
+          email: email,
+          password: 'password123',
+          register: false,
+        );
+
+    final localAfter = await DbService.instance.getById(noteId);
+    expect(localAfter, isNull);
+
+    // And the stale local copy must not have been pushed back up either,
+    // un-deleting it on the server.
+    final remoteAfter = await PbService.instance.fetchAll();
+    final remoteNote = remoteAfter.firstWhere((n) => n.id == noteId);
+    expect(remoteNote.deleted, isTrue);
+  });
 }
