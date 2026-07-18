@@ -23,9 +23,9 @@ Note _note({required String title, int colorIndex = 0}) {
 /// Test double that keeps notes in memory only, so this file exercises the
 /// selection UI's wiring to the notifier without touching real storage or
 /// notifications - that persistence behavior is already covered by
-/// notes_provider_test.dart. Real sqflite_common_ffi I/O doesn't resolve
-/// within flutter_test's fake-async pump cycle, so mixing it into a widget
-/// test just hangs pumpAndSettle.
+/// notes_provider_test.dart. Real sembast file I/O doesn't resolve within
+/// flutter_test's fake-async pump cycle, so mixing it into a widget test
+/// just hangs pumpAndSettle.
 class _FakeNotesNotifier extends NotesNotifier {
   _FakeNotesNotifier(this._initial);
   final List<Note> _initial;

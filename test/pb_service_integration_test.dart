@@ -194,4 +194,76 @@ void main() {
       expect(PbService.instance.userEmail, email);
     });
   });
+
+  /// Exercises the Web Push registration surface added for UnifiedPush
+  /// (see backend/push.go and lib/services/unifiedpush_service.dart)
+  /// against the same live server - not the actual push delivery, which
+  /// needs a real distributor and can't be verified headlessly, but the
+  /// PocketBase-side plumbing UnifiedPushService depends on.
+  group('PbService push subscription support', () {
+    test('fetchVapidPublicKey returns the server\'s persisted public key',
+        () async {
+      await PbService.instance.connect(_testServerUrl);
+      await PbService.instance.register(
+        'test-${_uuid.v4()}@example.com',
+        'password123',
+      );
+
+      final key = await PbService.instance.fetchVapidPublicKey();
+
+      expect(key, isNotEmpty);
+    });
+
+    test('upsertPushSubscription creates a record, and calling it again '
+        'updates the same record instead of duplicating it', () async {
+      final prefs = await SharedPreferences.getInstance();
+      await PbService.instance.connect(_testServerUrl);
+      await PbService.instance.register(
+        'test-${_uuid.v4()}@example.com',
+        'password123',
+      );
+
+      await PbService.instance.upsertPushSubscription(
+        endpoint: 'https://push.example.com/first',
+        p256dh: 'p256dh-key',
+        auth: 'auth-secret',
+        instance: 'default',
+      );
+      final firstId = prefs.getString('pb_push_subscription_id');
+      expect(firstId, isNotNull);
+
+      await PbService.instance.upsertPushSubscription(
+        endpoint: 'https://push.example.com/rotated',
+        p256dh: 'p256dh-key-2',
+        auth: 'auth-secret-2',
+        instance: 'default',
+      );
+      final secondId = prefs.getString('pb_push_subscription_id');
+
+      expect(secondId, firstId);
+    });
+
+    test('deletePushSubscription clears the cached record and is safe to '
+        'call again with nothing registered', () async {
+      final prefs = await SharedPreferences.getInstance();
+      await PbService.instance.connect(_testServerUrl);
+      await PbService.instance.register(
+        'test-${_uuid.v4()}@example.com',
+        'password123',
+      );
+      await PbService.instance.upsertPushSubscription(
+        endpoint: 'https://push.example.com/to-remove',
+        p256dh: 'p256dh-key',
+        auth: 'auth-secret',
+        instance: 'default',
+      );
+      expect(prefs.getString('pb_push_subscription_id'), isNotNull);
+
+      await PbService.instance.deletePushSubscription();
+      expect(prefs.getString('pb_push_subscription_id'), isNull);
+
+      // Idempotent: nothing registered, must not throw.
+      await PbService.instance.deletePushSubscription();
+    });
+  });
 }

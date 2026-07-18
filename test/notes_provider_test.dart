@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/services/db_service.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sembast/sembast_memory.dart';
 import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
@@ -29,8 +29,7 @@ Note _newNote({
 
 void main() {
   setUpAll(() {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
+    DbService.instance.debugFactory = databaseFactoryMemory;
   });
 
   // DbService is a process-wide singleton with a cached connection, so wipe

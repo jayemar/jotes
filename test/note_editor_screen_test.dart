@@ -19,8 +19,8 @@ Note _existingNote({String body = 'One line'}) {
 }
 
 /// Records every addOrUpdate call in memory instead of touching real
-/// storage - real sqflite_common_ffi I/O doesn't resolve within
-/// flutter_test's fake-async pump cycle, so it hangs pumpAndSettle (see
+/// storage - real sembast file I/O doesn't resolve within flutter_test's
+/// fake-async pump cycle, so it hangs pumpAndSettle (see
 /// notes_screen_selection_test.dart for the same lesson).
 class _RecordingNotesNotifier extends NotesNotifier {
   final List<Note> saved = [];

@@ -3,6 +3,8 @@ import '../models/note.dart';
 import '../services/db_service.dart';
 import '../services/notification_service.dart';
 import '../services/pb_service.dart';
+import '../services/sync_engine.dart';
+import '../services/unifiedpush_service.dart';
 import 'notes_provider.dart';
 
 enum SyncStatus { disconnected, connecting, connected, error }
@@ -69,45 +71,26 @@ class SyncNotifier extends Notifier<SyncState> {
 
   Future<void> disconnect() async {
     PbService.instance.unsubscribe();
+    try {
+      await UnifiedPushService.instance.unregister();
+    } catch (_) {
+      // Not fatal - see addOrUpdate in notes_provider.dart for the same
+      // reasoning; disconnecting the sync session must still succeed.
+    }
     await PbService.instance.disconnect();
     state = SyncState.initial;
   }
 
   Future<void> _startSync() async {
-    await _mergeSync();
-    PbService.instance.subscribe(_handleRemoteEvent);
-  }
-
-  /// One-time reconciliation on connect: newer-wins by `updated` timestamp
-  /// in either direction, and anything local-only gets pushed up. After
-  /// this, [PbService.subscribe] takes over for ongoing changes.
-  Future<void> _mergeSync() async {
-    final local = await DbService.instance.getAll();
-    final localById = {for (final n in local) n.id: n};
-    final remote = await PbService.instance.fetchAll();
-    final remoteById = {for (final n in remote) n.id: n};
-
-    for (final r in remote) {
-      final l = localById[r.id];
-      if (l == null || l.updated.isBefore(r.updated)) {
-        await DbService.instance.upsert(r);
-      }
-    }
-
-    for (final l in local) {
-      final r = remoteById[l.id];
-      if (r == null || l.updated.isAfter(r.updated)) {
-        await PbService.instance.upsert(l);
-      }
-    }
-
-    try {
-      await NotificationService.instance.rescheduleAll();
-    } catch (_) {
-      // Notes are already saved; a failed reminder reschedule is not fatal.
-    }
-
+    await mergeSync();
     ref.invalidate(notesProvider);
+    PbService.instance.subscribe(_handleRemoteEvent);
+    try {
+      await UnifiedPushService.instance.register();
+    } catch (_) {
+      // Push is a delivery-reliability improvement, not a requirement -
+      // sync already works via _mergeSync/subscribe above without it.
+    }
   }
 
   Future<void> _handleRemoteEvent(String action, Note? note) async {

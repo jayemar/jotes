@@ -7,11 +7,27 @@ import 'screens/note_editor_screen.dart';
 import 'screens/notes_screen.dart';
 import 'services/db_service.dart';
 import 'services/notification_service.dart';
+import 'services/pb_service.dart';
+import 'services/unifiedpush_service.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
-void main() async {
+/// UnifiedPush can start the app headlessly (no UI) purely to hand a
+/// background push to [UnifiedPushService], passing `--unifiedpush-bg` in
+/// [args] - the same entrypoint runs either way, and this flag is what
+/// decides whether to actually build a widget tree. See
+/// UnifiedPushService.initialize for why onMessage needs to be registered
+/// in both cases.
+void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  await UnifiedPushService.instance.initialize();
+
+  if (args.contains('--unifiedpush-bg')) {
+    await NotificationService.instance.initialize();
+    await PbService.instance.restore();
+    return;
+  }
+
   await NotificationService.instance.initialize();
   runApp(const ProviderScope(child: JotesApp()));
 }

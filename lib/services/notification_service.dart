@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
@@ -22,6 +23,12 @@ class NotificationService {
   Stream<String> get onNoteTapped => _tapController.stream;
 
   Future<void> initialize() async {
+    // flutter_local_notifications has no web platform implementation at
+    // all - calling into it on web throws before runApp() ever gets a
+    // chance to render, leaving a blank page. Reminders are an
+    // Android-only feature, so just skip setup entirely on web.
+    if (kIsWeb) return;
+
     tz.initializeTimeZones();
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -45,6 +52,7 @@ class NotificationService {
   /// push a route (onDidReceiveNotificationResponse never fires for this
   /// case, since there's no running app instance yet to deliver it to).
   Future<String?> getLaunchNoteId() async {
+    if (kIsWeb) return null;
     try {
       final details = await _plugin.getNotificationAppLaunchDetails();
       if (details?.didNotificationLaunchApp != true) return null;
@@ -64,6 +72,7 @@ class NotificationService {
   /// Defaults to true on platforms with no such platform-specific
   /// implementation (e.g. web), since the concept doesn't apply there.
   Future<bool> notificationsEnabled() async {
+    if (kIsWeb) return true;
     try {
       final androidImpl = _plugin
           .resolvePlatformSpecificImplementation<
@@ -83,6 +92,7 @@ class NotificationService {
   /// this silently no-ops rather than re-prompting, and the user must
   /// enable it manually via system Settings.
   Future<void> requestNotificationsAccess() async {
+    if (kIsWeb) return;
     final androidImpl = _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
@@ -94,6 +104,7 @@ class NotificationService {
   /// (e.g. web) with no such platform-specific implementation, since the
   /// concept doesn't apply there.
   Future<bool> exactAlarmsPermitted() async {
+    if (kIsWeb) return true;
     try {
       final androidImpl = _plugin
           .resolvePlatformSpecificImplementation<
@@ -108,6 +119,7 @@ class NotificationService {
   /// system "Alarms & reminders" settings screen, since it isn't grantable
   /// via a normal in-app permission dialog).
   Future<void> requestExactAlarmsAccess() async {
+    if (kIsWeb) return;
     final androidImpl = _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
@@ -115,6 +127,7 @@ class NotificationService {
   }
 
   Future<void> schedule(Note note) async {
+    if (kIsWeb) return;
     if (note.reminderAt == null) return;
     final fireTime = note.reminderAt!;
     if (!fireTime.isAfter(DateTime.now())) return;
@@ -141,10 +154,12 @@ class NotificationService {
   }
 
   Future<void> cancel(int notificationId) async {
+    if (kIsWeb) return;
     await _plugin.cancel(notificationId);
   }
 
   Future<void> rescheduleAll() async {
+    if (kIsWeb) return;
     await _plugin.cancelAll();
     final notes = await DbService.instance.withFutureReminders();
     for (final note in notes) {

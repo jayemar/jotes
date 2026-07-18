@@ -1,24 +1,28 @@
-FROM alpine:3.20 AS download
+# jotes' backend is a custom Go program embedding PocketBase (not the
+# stock prebuilt binary) so it can register Go-native hooks for Web Push
+# fan-out (see push.go) - JS hooks can't do the RFC8291 encryption that
+# requires. PocketBase's default modernc.org/sqlite driver is pure Go, so
+# CGO_ENABLED=0 gives a fully static binary and a minimal final image.
+FROM golang:1.25-alpine AS build
 
-ARG PB_VERSION=0.39.7
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
 
-RUN apk add --no-cache unzip curl ca-certificates
+COPY main.go push.go ./
+COPY migrations ./migrations
 
-RUN curl -fsSL -o /tmp/pb.zip \
-        "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_amd64.zip" \
-    && unzip /tmp/pb.zip -d /pb \
-    && rm /tmp/pb.zip
+RUN CGO_ENABLED=0 go build -o /pb/jotes-backend .
 
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates
 
-COPY --from=download /pb/pocketbase /usr/local/bin/pocketbase
+COPY --from=build /pb/jotes-backend /usr/local/bin/jotes-backend
 
 WORKDIR /pb
-COPY pb_migrations ./pb_migrations
 
 EXPOSE 8090
 VOLUME /pb/pb_data
 
-ENTRYPOINT ["pocketbase", "serve", "--http=0.0.0.0:8090"]
+ENTRYPOINT ["jotes-backend", "serve", "--http=0.0.0.0:8090", "--dir=/pb/pb_data"]

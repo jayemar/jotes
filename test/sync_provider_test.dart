@@ -7,15 +7,15 @@ import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/sync_provider.dart';
 import 'package:jotes/services/db_service.dart';
 import 'package:jotes/services/pb_service.dart';
+import 'package:sembast/sembast_memory.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
 /// Exercises SyncNotifier's merge-on-connect logic against the same live
 /// PocketBase instance used by pb_service_integration_test.dart (see
-/// backend/Dockerfile), combined with a real local FFI-backed DbService -
-/// the merge algorithm's correctness depends on the interaction between
-/// both real stores, not just one in isolation.
+/// backend/Dockerfile), combined with a real local in-memory-backed
+/// DbService - the merge algorithm's correctness depends on the
+/// interaction between both real stores, not just one in isolation.
 const _testServerUrl = 'http://localhost:18091';
 const _uuid = Uuid();
 
@@ -37,8 +37,7 @@ Note _note({
 
 void main() {
   setUpAll(() {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
+    DbService.instance.debugFactory = databaseFactoryMemory;
   });
 
   setUp(() async {
