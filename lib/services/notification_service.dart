@@ -45,6 +45,12 @@ class NotificationService {
             AndroidFlutterLocalNotificationsPlugin>();
     await androidImpl?.requestNotificationsPermission();
     await androidImpl?.requestExactAlarmsPermission();
+    // Needed for the full-screen takeover in schedule() below to actually
+    // show over the lock screen on Android 14+; granted by default there
+    // for apps with alarm functionality, but requesting explicitly is
+    // still the documented, defensive thing to do (see
+    // requestFullScreenIntentPermission's own doc comment).
+    await androidImpl?.requestFullScreenIntentPermission();
   }
 
   /// If the app process was cold-started by tapping a reminder notification,
@@ -144,6 +150,13 @@ class NotificationService {
           importance: Importance.high,
           priority: Priority.high,
           styleInformation: BigTextStyleInformation(note.body),
+          category: AndroidNotificationCategory.alarm,
+          // Takes over the screen (even locked/app closed) the same way a
+          // real alarm clock does, rather than only ever showing a tray
+          // notification that's easy to miss. The plugin then treats this
+          // exactly like a normal notification tap - see onNoteTapped/
+          // getLaunchNoteId in main.dart, which already handle that.
+          fullScreenIntent: true,
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
@@ -163,7 +176,18 @@ class NotificationService {
     await _plugin.cancelAll();
     final notes = await DbService.instance.withFutureReminders();
     for (final note in notes) {
-      await schedule(note);
+      // cancelAll() above already wiped every previously scheduled alarm -
+      // one note failing to (re)schedule (e.g. a transient plugin error)
+      // must not silently cost every other note later in this list its
+      // alarm too, which an unguarded loop would do.
+      try {
+        await schedule(note);
+      } catch (_) {
+        // Nothing more useful to do here: this runs from a background
+        // sync path with no UI to report a per-note failure through (see
+        // addOrUpdate in notes_provider.dart for the interactive-path
+        // equivalent, which does surface an error).
+      }
     }
   }
 }

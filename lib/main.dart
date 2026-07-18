@@ -7,12 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'providers/appearance_provider.dart';
 import 'providers/theme_provider.dart';
-import 'screens/note_editor_screen.dart';
 import 'screens/notes_screen.dart';
 import 'services/db_service.dart';
 import 'services/notification_service.dart';
 import 'services/pb_service.dart';
 import 'services/unifiedpush_service.dart';
+import 'widgets/reminder_popup.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -81,9 +81,13 @@ class _JotesAppState extends ConsumerState<JotesApp> {
   Future<void> _openNoteById(String id) async {
     final note = await DbService.instance.getById(id);
     if (note == null) return; // note may have since been deleted
-    navigatorKey.currentState?.push(
-      MaterialPageRoute(builder: (_) => NoteEditorScreen(existing: note)),
-    );
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+    // navigatorKey.currentContext is re-fetched fresh above, not a stale
+    // State's own context captured before the await - safe despite the
+    // lint, same reasoning as the ignores elsewhere in this codebase.
+    // ignore: use_build_context_synchronously
+    await showReminderPopup(context, note);
   }
 
   @override
