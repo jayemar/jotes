@@ -188,4 +188,91 @@ void main() {
     final remoteNote = remoteAfter.firstWhere((n) => n.id == noteId);
     expect(remoteNote.deleted, isTrue);
   });
+
+  test('when one device deletes a note and another edited it offline, a '
+      'newer delete wins and discards the older edit', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final noteId = _uuid.v4();
+    final email = 'test-${_uuid.v4()}@example.com';
+
+    // Seed as already synced, then another device deletes it - the
+    // tombstone's updated timestamp is server-assigned (autodate), so it's
+    // "now" at the moment this call runs, slightly after the seed above.
+    await PbService.instance.connect(_testServerUrl);
+    await PbService.instance.register(email, 'password123');
+    await PbService.instance.upsert(_note(id: noteId, title: 'Original'));
+    await PbService.instance.delete(noteId);
+    await PbService.instance.disconnect();
+
+    // This device's own local edit happened well before that delete -
+    // pinned to a full day in the past so there's no ambiguity about
+    // ordering against the real-time tombstone above.
+    await DbService.instance.upsert(_note(
+      id: noteId,
+      title: 'Local edit made before the delete',
+      updated: DateTime.now().subtract(const Duration(days: 1)),
+    ));
+
+    await container.read(syncProvider.notifier).connect(
+          url: _testServerUrl,
+          email: email,
+          password: 'password123',
+          register: false,
+        );
+
+    // The delete is newer, so it wins: the older local edit is discarded
+    // and the note ends up deleted, not pushed back up to resurrect it.
+    final localAfter = await DbService.instance.getById(noteId);
+    expect(localAfter, isNull);
+
+    final remoteAfter = await PbService.instance.fetchAll();
+    expect(remoteAfter.firstWhere((n) => n.id == noteId).deleted, isTrue);
+  });
+
+  test('when one device deletes a note and another edited it offline, a '
+      'newer edit wins and undoes the older delete', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final noteId = _uuid.v4();
+    final email = 'test-${_uuid.v4()}@example.com';
+
+    // Seed as already synced, then another device deletes it - the
+    // tombstone gets a server-assigned "now" timestamp.
+    await PbService.instance.connect(_testServerUrl);
+    await PbService.instance.register(email, 'password123');
+    await PbService.instance.upsert(_note(id: noteId, title: 'Original'));
+    await PbService.instance.delete(noteId);
+    await PbService.instance.disconnect();
+
+    // This device's own local edit happened after that delete - pinned to
+    // a full day in the future so there's no ambiguity about ordering
+    // against the real-time tombstone above.
+    await DbService.instance.upsert(_note(
+      id: noteId,
+      title: 'Local edit made after the delete',
+      updated: DateTime.now().add(const Duration(days: 1)),
+    ));
+
+    await container.read(syncProvider.notifier).connect(
+          url: _testServerUrl,
+          email: email,
+          password: 'password123',
+          register: false,
+        );
+
+    // The edit is newer, so it wins: it survives locally, and gets pushed
+    // up, clearing the tombstone (Note.toPocketBase always sends
+    // deleted:false) rather than being blocked by the older delete.
+    final localAfter = await DbService.instance.getById(noteId);
+    expect(localAfter, isNotNull);
+    expect(localAfter!.title, 'Local edit made after the delete');
+
+    final remoteAfter = await PbService.instance.fetchAll();
+    final remoteNote = remoteAfter.firstWhere((n) => n.id == noteId);
+    expect(remoteNote.deleted, isFalse);
+    expect(remoteNote.title, 'Local edit made after the delete');
+  });
 }
