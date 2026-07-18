@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,6 +26,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   final Set<String> _selectedIds = {};
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
+  Timer? _reminderChipRefreshTimer;
 
   bool get _selectionMode => _selectedIds.isNotEmpty;
 
@@ -35,11 +38,24 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     // when the user next tries to set one (note_editor_screen.dart).
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _checkNotificationsEnabled());
+
+    // NoteCard's reminder chip switches from green (upcoming) to red (past)
+    // by comparing reminderAt to DateTime.now() on every build - correct,
+    // but nothing otherwise triggers a rebuild as time passes with no data
+    // change, so a fired reminder's chip visibly stays green until some
+    // unrelated event (editing a note, a sync update) happens to rebuild
+    // the grid. This timer's only job is to periodically force that
+    // rebuild so the chip's own already-correct logic gets re-evaluated.
+    _reminderChipRefreshTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _reminderChipRefreshTimer?.cancel();
     super.dispose();
   }
 
