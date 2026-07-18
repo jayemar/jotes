@@ -1,9 +1,13 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../models/note.dart';
 import '../providers/notes_provider.dart';
+import '../services/markdown_export_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_body_editor.dart';
@@ -195,6 +199,19 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     });
   }
 
+  /// Exports the note's current in-progress state (not just its last-saved
+  /// version), so exporting works even before the note has ever been
+  /// saved.
+  Future<void> _exportToMarkdown() async {
+    final note = _buildNote();
+    await FilePicker.platform.saveFile(
+      fileName: '${MarkdownExportService.instance.suggestedFilename(note)}.md',
+      type: FileType.custom,
+      allowedExtensions: ['md'],
+      bytes: utf8.encode(MarkdownExportService.instance.toMarkdown(note)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bgColor = noteColorFor(context, _colorIndex);
@@ -301,6 +318,11 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                       onPressed: _clearReminder,
                       tooltip: 'Remove reminder',
                     ),
+                  IconButton(
+                    icon: Icon(Icons.ios_share_outlined, color: textColor),
+                    onPressed: _exportToMarkdown,
+                    tooltip: 'Export as Markdown',
+                  ),
                 ],
               ),
             ),

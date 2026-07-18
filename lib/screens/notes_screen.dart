@@ -1,13 +1,18 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/note.dart';
+import '../providers/appearance_provider.dart';
 import '../providers/notes_provider.dart';
 import '../providers/sync_provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/keep_import_service.dart';
+import '../services/markdown_export_service.dart';
+import '../services/markdown_import_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_card.dart';
@@ -125,6 +130,36 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     }
   }
 
+  /// A single selected note is saved as a plain .md file directly; more
+  /// than one is bundled into a zip (see MarkdownExportService.toZip) since
+  /// there's no reliably cross-platform way to write multiple files to a
+  /// chosen location in one picker interaction.
+  Future<void> _exportSelectedToMarkdown(List<Note> notes) async {
+    final selected = notes.where((n) => _selectedIds.contains(n.id)).toList();
+    _clearSelection();
+    if (selected.isEmpty) return;
+
+    if (selected.length == 1) {
+      final note = selected.single;
+      await FilePicker.platform.saveFile(
+        fileName:
+            '${MarkdownExportService.instance.suggestedFilename(note)}.md',
+        type: FileType.custom,
+        allowedExtensions: ['md'],
+        bytes: utf8.encode(MarkdownExportService.instance.toMarkdown(note)),
+      );
+      return;
+    }
+
+    final zipBytes = MarkdownExportService.instance.toZip(selected);
+    await FilePicker.platform.saveFile(
+      fileName: 'jotes-export.zip',
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+      bytes: zipBytes,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final notesAsync = ref.watch(notesProvider);
@@ -161,7 +196,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: colorScheme.surfaceContainerLow,
-      drawer: _buildDrawer(context),
+      drawer: _buildDrawer(context, notes),
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
@@ -223,6 +258,11 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                       onPressed: () => _recolorSelected(notes),
                     ),
                     IconButton(
+                      icon: Icon(Icons.folder_zip_outlined, color: iconColor),
+                      tooltip: 'Export as Markdown',
+                      onPressed: () => _exportSelectedToMarkdown(notes),
+                    ),
+                    IconButton(
                       icon: Icon(Icons.delete_outline, color: iconColor),
                       tooltip: 'Delete',
                       onPressed: () => _deleteSelected(notes),
@@ -267,15 +307,15 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     );
   }
 
-  Widget _buildDrawer(BuildContext context) {
+  Widget _buildDrawer(BuildContext context, List<Note> notes) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     final themeMode = ref.watch(themeModeProvider);
+    final appearance = ref.watch(appearanceProvider);
     final syncState = ref.watch(syncProvider);
 
     return Drawer(
       child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: ListView(
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
@@ -303,6 +343,125 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
               ),
             ),
             const Divider(height: 1),
+            _drawerSectionLabel(context, 'Appearance'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Text(
+                'Theme',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: DropdownButton<ThemeMode>(
+                key: const Key('theme_dropdown'),
+                value: themeMode,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                items: const [
+                  DropdownMenuItem(
+                    value: ThemeMode.light,
+                    child: Text('Light'),
+                  ),
+                  DropdownMenuItem(
+                    value: ThemeMode.dark,
+                    child: Text('Dark'),
+                  ),
+                  DropdownMenuItem(
+                    value: ThemeMode.system,
+                    child: Text('System'),
+                  ),
+                ],
+                onChanged: _setThemeMode,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Text(
+                'Font',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: DropdownButton<AppFont>(
+                key: const Key('font_dropdown'),
+                value: appearance.font,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                items: [
+                  for (final font in AppFont.values)
+                    DropdownMenuItem(
+                      value: font,
+                      child: Text(
+                        font.label,
+                        style: TextStyle(fontFamily: font.fontFamily),
+                      ),
+                    ),
+                ],
+                onChanged: _setFont,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Text(
+                'Text size',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: DropdownButton<TextSizeOption>(
+                key: const Key('text_size_dropdown'),
+                value: appearance.textSize,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                items: [
+                  for (final size in TextSizeOption.values)
+                    DropdownMenuItem(value: size, child: Text(size.label)),
+                ],
+                onChanged: _setTextSize,
+              ),
+            ),
+            const Divider(height: 1),
+            _drawerSectionLabel(context, 'Data'),
+            ListTile(
+              leading: const Icon(Icons.upload_file),
+              title: const Text('Import from Google Keep'),
+              onTap: () {
+                Navigator.pop(context);
+                _importFromKeep(context, ref);
+              },
+            ),
+            ListTile(
+              key: const Key('import_markdown_item'),
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Import from Markdown'),
+              onTap: () {
+                Navigator.pop(context);
+                _importFromMarkdown(context, ref);
+              },
+            ),
+            ListTile(
+              key: const Key('export_markdown_item'),
+              leading: const Icon(Icons.folder_zip_outlined),
+              title: const Text('Export to Markdown'),
+              subtitle: const Text('All notes, as a .zip'),
+              onTap: () {
+                Navigator.pop(context);
+                _exportNotesToMarkdown(context, notes);
+              },
+            ),
+            const Divider(height: 1),
             ListTile(
               key: const Key('sync_drawer_item'),
               leading: Icon(
@@ -326,50 +485,20 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                 );
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.upload_file),
-              title: const Text('Import from Google Keep'),
-              onTap: () {
-                Navigator.pop(context);
-                _importFromKeep(context, ref);
-              },
-            ),
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Text(
-                'Theme',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: DropdownButton<ThemeMode>(
-                key: const Key('theme_dropdown'),
-                value: themeMode,
-                isExpanded: true,
-                underline: const SizedBox.shrink(),
-                items: const [
-                  DropdownMenuItem(
-                    value: ThemeMode.light,
-                    child: Text('Light'),
-                  ),
-                  DropdownMenuItem(
-                    value: ThemeMode.dark,
-                    child: Text('Dark'),
-                  ),
-                  DropdownMenuItem(
-                    value: ThemeMode.system,
-                    child: Text('System'),
-                  ),
-                ],
-                onChanged: _setThemeMode,
-              ),
-            ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _drawerSectionLabel(BuildContext context, String label) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -378,6 +507,16 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   void _setThemeMode(ThemeMode? mode) {
     if (mode == null) return;
     ref.read(themeModeProvider.notifier).setThemeMode(mode);
+  }
+
+  void _setFont(AppFont? font) {
+    if (font == null) return;
+    ref.read(appearanceProvider.notifier).setFont(font);
+  }
+
+  void _setTextSize(TextSizeOption? size) {
+    if (size == null) return;
+    ref.read(appearanceProvider.notifier).setTextSize(size);
   }
 
   void _openNote(BuildContext context, WidgetRef ref, Note? note) {
@@ -419,6 +558,62 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _importFromMarkdown(BuildContext context, WidgetRef ref) async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['md'],
+      allowMultiple: true,
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+
+    final filesByName = <String, Uint8List>{
+      for (final file in picked.files)
+        if (file.bytes != null) file.name: file.bytes!,
+    };
+
+    final result = MarkdownImportService.instance.parseFiles(filesByName);
+    await ref.read(notesProvider.notifier).addAllFromImport(result.notes);
+
+    if (!context.mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Import complete'),
+        content: Text(
+          'Imported ${result.imported} note(s).\n'
+          'Failed to read ${result.failed} file(s).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportNotesToMarkdown(
+    BuildContext context,
+    List<Note> notes,
+  ) async {
+    if (notes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No notes to export.')),
+      );
+      return;
+    }
+
+    final zipBytes = MarkdownExportService.instance.toZip(notes);
+    await FilePicker.platform.saveFile(
+      fileName: 'jotes-export.zip',
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+      bytes: zipBytes,
     );
   }
 }

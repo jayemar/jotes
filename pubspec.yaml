@@ -44,6 +44,7 @@ dependencies:
   sembast: ^3.8.9+1
   sembast_web: ^2.4.5+1
   unifiedpush: ^6.2.0
+  google_fonts: ^8.2.0
 
 dev_dependencies:
   flutter_test:
@@ -62,6 +63,12 @@ flutter:
     - family: Pacifico
       fonts:
         - asset: assets/fonts/Pacifico-Regular.ttf
+  # google_fonts matches these by filename (e.g. "Inter-Regular.ttf") against
+  # this asset folder rather than the fonts: block above - see
+  # https://pub.dev/packages/google_fonts#bundling-fonts-when-releasing.
+  # Bundled (not fetched at runtime) so font choice works fully offline.
+  assets:
+    - assets/google_fonts/
 
 flutter_launcher_icons:
   android: true
