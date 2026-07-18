@@ -147,7 +147,7 @@ void main() {
       );
 
       final events = <String>[];
-      PbService.instance.subscribe((action, note) {
+      await PbService.instance.subscribe((action, note) {
         if (note != null) events.add('$action:${note.id}');
       });
       // Give the realtime connection a moment to actually establish before
@@ -157,12 +157,19 @@ void main() {
       final note = _note();
       await PbService.instance.upsert(note);
 
+      // Waits for this specific note's event, not just "any event at all" -
+      // the subscription is collection-wide ('*'), so it also receives
+      // events from whatever other test files happen to be running
+      // concurrently against the same shared live server, which could
+      // otherwise satisfy an "any event" check before this test's own
+      // event has actually arrived.
+      final expected = 'create:${note.id}';
       final deadline = DateTime.now().add(const Duration(seconds: 5));
-      while (events.isEmpty && DateTime.now().isBefore(deadline)) {
+      while (!events.contains(expected) && DateTime.now().isBefore(deadline)) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
 
-      PbService.instance.unsubscribe();
+      await PbService.instance.unsubscribe();
       expect(events, contains('create:${note.id}'));
     });
 

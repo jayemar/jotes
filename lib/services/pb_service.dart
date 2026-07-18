@@ -112,19 +112,47 @@ class PbService {
     }
   }
 
-  void subscribe(void Function(String action, Note? note) onEvent) {
+  /// Best-effort, same reasoning as [unsubscribe]: establishing the
+  /// realtime connection is genuinely async and can fail (e.g. a
+  /// transient network issue, or a race with a session that hasn't
+  /// finished authenticating yet) - previously fire-and-forget (declared
+  /// void, never awaiting the real Future underneath), so a failure here
+  /// became an unhandled async error blamed on whatever unrelated code
+  /// happened to be running when it surfaced. A failed subscribe attempt
+  /// just means realtime updates won't arrive until the next successful
+  /// sync/reconnect, not something that should crash anything.
+  Future<void> subscribe(void Function(String action, Note? note) onEvent) async {
     if (!isLoggedIn) return;
-    _client?.collection('notes').subscribe('*', (event) {
-      final record = event.record;
-      onEvent(
-        event.action,
-        record != null ? Note.fromPocketBase(record.toJson()) : null,
-      );
-    });
+    try {
+      await _client?.collection('notes').subscribe('*', (event) {
+        final record = event.record;
+        onEvent(
+          event.action,
+          record != null ? Note.fromPocketBase(record.toJson()) : null,
+        );
+      });
+    } catch (_) {
+      // Not fatal - see addOrUpdate in notes_provider.dart for the same
+      // reasoning.
+    }
   }
 
-  void unsubscribe() {
-    _client?.collection('notes').unsubscribe();
+  /// Best-effort: the underlying SDK call is genuinely async (it may need
+  /// to open a realtime connection just to tear it down again) and throws
+  /// if there's no live connection left to unsubscribe from - e.g. calling
+  /// this after [disconnect] already ran, or when a subscription was never
+  /// established in the first place. Previously this was fire-and-forget
+  /// (declared void, never awaiting the real Future underneath), which
+  /// meant a failure here became an unhandled async error with no call
+  /// site able to catch it, surfacing later against whatever unrelated
+  /// code happened to be running when it landed.
+  Future<void> unsubscribe() async {
+    try {
+      await _client?.collection('notes').unsubscribe();
+    } catch (_) {
+      // Not fatal - see addOrUpdate in notes_provider.dart for the same
+      // reasoning.
+    }
   }
 
   /// The backend's Web Push VAPID public key, needed by

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import '../models/note.dart';
@@ -9,6 +10,33 @@ import 'db_service.dart';
 
 const _channelId = 'jotes_reminders';
 const _channelName = 'Reminders';
+
+/// Note ids whose reminder has already been handled once - either fired
+/// normally via AlarmManager, or shown immediately as an overdue catch-up
+/// (see showOverdueIfNotAlready) - so a reminder is never shown twice, and
+/// a long-past reminder that already fired isn't mistaken for one that was
+/// never delivered. Deliberately local/per-device (SharedPreferences, not
+/// synced), matching how each device's own alarm delivery is independent.
+const _handledReminderIdsPrefsKey = 'handled_reminder_note_ids';
+
+NotificationDetails _reminderNotificationDetails(Note note) {
+  return NotificationDetails(
+    android: AndroidNotificationDetails(
+      _channelId,
+      _channelName,
+      importance: Importance.high,
+      priority: Priority.high,
+      styleInformation: BigTextStyleInformation(note.body),
+      category: AndroidNotificationCategory.alarm,
+      // Takes over the screen (even locked/app closed) the same way a
+      // real alarm clock does, rather than only ever showing a tray
+      // notification that's easy to miss. The plugin then treats this
+      // exactly like a normal notification tap - see onNoteTapped/
+      // getLaunchNoteId in main.dart, which already handle that.
+      fullScreenIntent: true,
+    ),
+  );
+}
 
 class NotificationService {
   static final NotificationService instance = NotificationService._();
@@ -143,27 +171,53 @@ class NotificationService {
       note.title.isEmpty ? 'Reminder' : note.title,
       note.body.isEmpty ? 'You have a note reminder.' : note.body,
       tz.TZDateTime.from(fireTime, tz.local),
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          _channelId,
-          _channelName,
-          importance: Importance.high,
-          priority: Priority.high,
-          styleInformation: BigTextStyleInformation(note.body),
-          category: AndroidNotificationCategory.alarm,
-          // Takes over the screen (even locked/app closed) the same way a
-          // real alarm clock does, rather than only ever showing a tray
-          // notification that's easy to miss. The plugin then treats this
-          // exactly like a normal notification tap - see onNoteTapped/
-          // getLaunchNoteId in main.dart, which already handle that.
-          fullScreenIntent: true,
-        ),
-      ),
+      _reminderNotificationDetails(note),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       payload: note.id,
     );
+    // Marked handled now (not only once it actually fires, which this
+    // plugin gives no callback for) so that once its time eventually
+    // passes, withOverdueReminders/showOverdueIfNotAlready don't mistake
+    // an alarm Android already scheduled normally for one that was never
+    // delivered at all.
+    await _markReminderHandled(note.id);
+  }
+
+  /// Shows a reminder immediately rather than scheduling it for later -
+  /// for a note whose reminder time has already passed by the time this
+  /// device learns about it (e.g. synced in via a push that arrived after
+  /// a short-lead-time reminder's fire time), which schedule() above
+  /// would otherwise silently never show at all, forever. A no-op if this
+  /// note's reminder has already been handled once, whether by this same
+  /// catch-up or by firing normally through schedule() earlier.
+  Future<void> showOverdueIfNotAlready(Note note) async {
+    if (kIsWeb) return;
+    if (note.reminderAt == null) return;
+    if (await _reminderAlreadyHandled(note.id)) return;
+
+    await _plugin.show(
+      note.notificationId,
+      note.title.isEmpty ? 'Reminder' : note.title,
+      note.body.isEmpty ? 'You have a note reminder.' : note.body,
+      _reminderNotificationDetails(note),
+      payload: note.id,
+    );
+    await _markReminderHandled(note.id);
+  }
+
+  Future<bool> _reminderAlreadyHandled(String noteId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final handled = prefs.getStringList(_handledReminderIdsPrefsKey) ?? [];
+    return handled.contains(noteId);
+  }
+
+  Future<void> _markReminderHandled(String noteId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final handled = prefs.getStringList(_handledReminderIdsPrefsKey) ?? [];
+    if (handled.contains(noteId)) return;
+    await prefs.setStringList(_handledReminderIdsPrefsKey, [...handled, noteId]);
   }
 
   Future<void> cancel(int notificationId) async {
@@ -187,6 +241,15 @@ class NotificationService {
         // sync path with no UI to report a per-note failure through (see
         // addOrUpdate in notes_provider.dart for the interactive-path
         // equivalent, which does surface an error).
+      }
+    }
+
+    final overdue = await DbService.instance.withOverdueReminders();
+    for (final note in overdue) {
+      try {
+        await showOverdueIfNotAlready(note);
+      } catch (_) {
+        // Same reasoning as above.
       }
     }
   }

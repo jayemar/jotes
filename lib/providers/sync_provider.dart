@@ -70,7 +70,7 @@ class SyncNotifier extends Notifier<SyncState> {
   }
 
   Future<void> disconnect() async {
-    PbService.instance.unsubscribe();
+    await PbService.instance.unsubscribe();
     try {
       await UnifiedPushService.instance.unregister();
     } catch (_) {
@@ -84,7 +84,7 @@ class SyncNotifier extends Notifier<SyncState> {
   Future<void> _startSync() async {
     await mergeSync();
     ref.invalidate(notesProvider);
-    PbService.instance.subscribe(_handleRemoteEvent);
+    await PbService.instance.subscribe(_handleRemoteEvent);
     try {
       await UnifiedPushService.instance.register();
     } catch (_) {

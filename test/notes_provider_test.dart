@@ -90,6 +90,25 @@ void main() {
       final found = await DbService.instance.getById('nope');
       expect(found, isNull);
     });
+
+    test('withOverdueReminders includes only notes whose reminder time has '
+        'already passed', () async {
+      await DbService.instance.upsert(_newNote(
+        id: 'overdue',
+        reminderAt: DateTime.now().subtract(const Duration(minutes: 5)),
+      ));
+      await DbService.instance.upsert(_newNote(
+        id: 'future',
+        reminderAt: DateTime.now().add(const Duration(minutes: 5)),
+      ));
+      await DbService.instance.upsert(_newNote(id: 'no-reminder'));
+
+      final overdue = await DbService.instance.withOverdueReminders();
+
+      expect(overdue.map((n) => n.id), contains('overdue'));
+      expect(overdue.map((n) => n.id), isNot(contains('future')));
+      expect(overdue.map((n) => n.id), isNot(contains('no-reminder')));
+    });
   });
 
   group('NotesNotifier', () {

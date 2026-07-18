@@ -68,6 +68,20 @@ class DbService {
     return records.map((r) => Note.fromMap(r.value)).toList();
   }
 
+  /// Notes whose reminder time has already passed - used to catch up on a
+  /// reminder that synced in (e.g. via a delayed push) after its own fire
+  /// time, which would otherwise never be shown at all (see
+  /// NotificationService.showOverdueIfNotAlready).
+  Future<List<Note>> withOverdueReminders() async {
+    final db = await _database;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final records = await _store.find(
+      db,
+      finder: Finder(filter: Filter.lessThanOrEquals('reminder_at', now)),
+    );
+    return records.map((r) => Note.fromMap(r.value)).toList();
+  }
+
   Future<void> upsert(Note note) async {
     final db = await _database;
     await _store.record(note.id).put(db, note.toMap());

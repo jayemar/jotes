@@ -48,6 +48,21 @@ void main() {
     }
   });
 
+  // PbService is a process-wide singleton, and nothing else here ever
+  // unsubscribes/disconnects it - without this, a previous test's realtime
+  // subscription can still be alive and firing (against a stale
+  // SyncNotifier/ProviderContainer already disposed by that test) while a
+  // later test runs, causing exactly the kind of intermittent,
+  // hard-to-reproduce failures that stayed invisible until this file had
+  // enough tests for the timing to actually collide. Safe to call
+  // unconditionally even when a test already disconnected mid-test to
+  // simulate a device going offline - both methods are best-effort
+  // themselves now (see PbService.unsubscribe/disconnect).
+  tearDown(() async {
+    await PbService.instance.unsubscribe();
+    await PbService.instance.disconnect();
+  });
+
   test('a remote-only note is pulled down into the local database',
       () async {
     final container = ProviderContainer();
