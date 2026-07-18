@@ -8,6 +8,17 @@ import (
 
 func init() {
 	m.Register(func(app core.App) error {
+		// A pre-existing deployment may already have this collection from
+		// the original JS migration (1721000000_create_notes_collection.js,
+		// ported to this Go file 1:1) - PocketBase tracks applied
+		// migrations by filename, and the changed extension means this
+		// migration looks unapplied there even though the schema it would
+		// create already exists. Treat that as already satisfied rather
+		// than colliding on the duplicate collection name.
+		if _, err := app.FindCollectionByNameOrId("notes"); err == nil {
+			return nil
+		}
+
 		collection := core.NewBaseCollection("notes", "")
 		collection.ListRule = types.Pointer("@request.auth.id != ''")
 		collection.ViewRule = types.Pointer("@request.auth.id != ''")
