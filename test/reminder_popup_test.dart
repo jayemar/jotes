@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
+import 'package:jotes/services/notification_service.dart';
 import 'package:jotes/widgets/reminder_popup.dart';
 
 Note _note() {
@@ -16,39 +17,70 @@ Note _note() {
   );
 }
 
-/// build() only - nothing in this test saves or deletes, so no need for
-/// the full recording-notifier machinery used in note_editor_screen_test.
-class _StubNotesNotifier extends NotesNotifier {
+/// Records every addOrUpdate call in memory instead of touching real
+/// storage - mirrors the same pattern in note_editor_screen_test.dart.
+class _RecordingNotesNotifier extends NotesNotifier {
+  final List<Note> saved = [];
+
   @override
   Future<List<Note>> build() async => const [];
+
+  @override
+  Future<String?> addOrUpdate(Note note) async {
+    saved.add(note);
+    state = AsyncData([note]);
+    return null;
+  }
 }
 
-Future<BuildContext> _pumpHostAndGetContext(WidgetTester tester) async {
+class _Harness {
+  final BuildContext context;
+  final WidgetRef ref;
+  const _Harness(this.context, this.ref);
+}
+
+Future<_Harness> _pumpHost(
+  WidgetTester tester, {
+  NotesNotifier Function()? notifier,
+}) async {
   late BuildContext capturedContext;
+  late WidgetRef capturedRef;
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        notesProvider.overrideWith(_StubNotesNotifier.new),
+        if (notifier != null) notesProvider.overrideWith(notifier),
       ],
       child: MaterialApp(
-        home: Builder(
-          builder: (context) {
+        home: Consumer(
+          builder: (context, ref, child) {
             capturedContext = context;
+            capturedRef = ref;
             return const Scaffold();
           },
         ),
       ),
     ),
   );
-  return capturedContext;
+  return _Harness(capturedContext, capturedRef);
 }
 
 void main() {
+  final canceledIds = <int>[];
+
+  setUp(() {
+    canceledIds.clear();
+    NotificationService.instance.debugOnCancel = canceledIds.add;
+  });
+
+  tearDown(() {
+    NotificationService.instance.debugOnCancel = null;
+  });
+
   testWidgets('shows the note\'s title and body', (tester) async {
-    final context = await _pumpHostAndGetContext(tester);
+    final host = await _pumpHost(tester);
     final note = _note();
 
-    showReminderPopup(context, note);
+    showReminderPopup(host.context, host.ref, note);
     await tester.pumpAndSettle();
 
     expect(find.text('Take out the trash'), findsOneWidget);
@@ -58,35 +90,66 @@ void main() {
 
   testWidgets('falls back to "Reminder" as the title when the note has none',
       (tester) async {
-    final context = await _pumpHostAndGetContext(tester);
+    final host = await _pumpHost(tester);
     final note = _note().copyWith(title: '');
 
-    showReminderPopup(context, note);
+    showReminderPopup(host.context, host.ref, note);
     await tester.pumpAndSettle();
 
     expect(find.text('Reminder'), findsOneWidget);
   });
 
-  testWidgets('Dismiss closes the popup without opening the note',
-      (tester) async {
-    final context = await _pumpHostAndGetContext(tester);
+  testWidgets('shows all four actions', (tester) async {
+    final host = await _pumpHost(tester);
 
-    showReminderPopup(context, _note());
+    showReminderPopup(host.context, host.ref, _note());
     await tester.pumpAndSettle();
-    expect(find.text('Dismiss'), findsOneWidget);
 
-    await tester.tap(find.text('Dismiss'));
+    expect(find.text('Open note'), findsOneWidget);
+    expect(find.text('Snooze'), findsOneWidget);
+    expect(find.text('Dismiss'), findsOneWidget);
+    expect(find.text('Ignore'), findsOneWidget);
+  });
+
+  testWidgets(
+      'Dismiss closes the popup, does not open the note, and cancels the '
+      'tray notification', (tester) async {
+    final host = await _pumpHost(tester);
+    final note = _note();
+
+    showReminderPopup(host.context, host.ref, note);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('reminder_popup_dismiss')));
     await tester.pumpAndSettle();
 
     expect(find.text('Take out the trash'), findsNothing);
     expect(find.byKey(const Key('title_field')), findsNothing);
+    expect(canceledIds, contains(note.notificationId));
+  });
+
+  testWidgets(
+      'Ignore closes the popup but leaves the tray notification alone',
+      (tester) async {
+    final host = await _pumpHost(tester);
+    final note = _note();
+
+    showReminderPopup(host.context, host.ref, note);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('reminder_popup_ignore')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Take out the trash'), findsNothing);
+    expect(find.byKey(const Key('title_field')), findsNothing);
+    expect(canceledIds, isEmpty);
   });
 
   testWidgets('Open note closes the popup and navigates to the editor',
       (tester) async {
-    final context = await _pumpHostAndGetContext(tester);
+    final host = await _pumpHost(tester);
 
-    showReminderPopup(context, _note());
+    showReminderPopup(host.context, host.ref, _note());
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Open note'));
@@ -96,5 +159,36 @@ void main() {
     // title field) is now showing with the same note's title loaded.
     expect(find.byKey(const Key('title_field')), findsOneWidget);
     expect(find.text('Take out the trash'), findsOneWidget);
+  });
+
+  testWidgets(
+      'Snooze cancels the tray notification, then picking a new time '
+      'saves the note with the updated reminder', (tester) async {
+    final recorder = _RecordingNotesNotifier();
+    final host = await _pumpHost(tester, notifier: () => recorder);
+    final note = _note();
+
+    showReminderPopup(host.context, host.ref, note);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('reminder_popup_snooze')));
+    await tester.pumpAndSettle();
+
+    // The popup itself closed immediately, before any picker interaction.
+    expect(find.text('Take out the trash'), findsNothing);
+    expect(canceledIds, contains(note.notificationId));
+
+    // Confirm the date picker, then the time picker, each with their
+    // pre-filled initial value (same flow as note_editor_screen_test.dart).
+    expect(find.text('OK'), findsOneWidget);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    expect(recorder.saved, hasLength(1));
+    expect(recorder.saved.single.id, note.id);
+    expect(recorder.saved.single.reminderAt, isNotNull);
+    expect(recorder.saved.single.reminderAt!.isAfter(DateTime.now()), isTrue);
   });
 }

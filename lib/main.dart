@@ -87,7 +87,7 @@ class _JotesAppState extends ConsumerState<JotesApp> {
     // State's own context captured before the await - safe despite the
     // lint, same reasoning as the ignores elsewhere in this codebase.
     // ignore: use_build_context_synchronously
-    await showReminderPopup(context, note);
+    await showReminderPopup(context, ref, note);
   }
 
   @override

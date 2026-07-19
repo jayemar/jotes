@@ -220,7 +220,18 @@ class NotificationService {
     await prefs.setStringList(_handledReminderIdsPrefsKey, [...handled, noteId]);
   }
 
+  /// Overridable by tests to observe cancel() calls without touching the
+  /// real plugin, which throws with no platform implementation registered
+  /// in flutter_test's VM environment (matching DbService.debugFactory's
+  /// same reasoning) - set, this replaces the real plugin call entirely
+  /// rather than just being notified alongside it.
+  void Function(int notificationId)? debugOnCancel;
+
   Future<void> cancel(int notificationId) async {
+    if (debugOnCancel != null) {
+      debugOnCancel!(notificationId);
+      return;
+    }
     if (kIsWeb) return;
     await _plugin.cancel(notificationId);
   }
