@@ -94,27 +94,29 @@ class _JotesAppState extends ConsumerState<JotesApp> {
   Widget build(BuildContext context) {
     final themeMode = ref.watch(themeModeProvider);
     final appearance = ref.watch(appearanceProvider);
-    final fontFamily = appearance.font.fontFamily;
+
+    final lightBase = ThemeData(
+      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1A73E8)),
+      useMaterial3: true,
+    );
+    final darkBase = ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF1A73E8),
+        brightness: Brightness.dark,
+      ),
+      useMaterial3: true,
+    );
 
     return MaterialApp(
       navigatorKey: navigatorKey,
       title: 'jotes',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1A73E8),
-        ),
-        useMaterial3: true,
-        fontFamily: fontFamily,
+      theme: lightBase.copyWith(
+        textTheme: appearance.font.textTheme(lightBase.textTheme),
       ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1A73E8),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        fontFamily: fontFamily,
+      darkTheme: darkBase.copyWith(
+        textTheme: appearance.font.textTheme(darkBase.textTheme),
       ),
       // The text-size setting is a deliberate app-level override, not a
       // multiplier on top of the system's own accessibility text scale -

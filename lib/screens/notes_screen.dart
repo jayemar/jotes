@@ -344,16 +344,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             ),
             const Divider(height: 1),
             _drawerSectionLabel(context, 'Appearance'),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: Text(
-                'Theme',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
+            _drawerFieldLabel(context, 'Theme'),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: DropdownButton<ThemeMode>(
@@ -361,33 +352,24 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                 value: themeMode,
                 isExpanded: true,
                 underline: const SizedBox.shrink(),
-                items: const [
+                items: [
                   DropdownMenuItem(
                     value: ThemeMode.light,
-                    child: Text('Light'),
+                    child: Text('Light', style: _drawerItemStyle(context)),
                   ),
                   DropdownMenuItem(
                     value: ThemeMode.dark,
-                    child: Text('Dark'),
+                    child: Text('Dark', style: _drawerItemStyle(context)),
                   ),
                   DropdownMenuItem(
                     value: ThemeMode.system,
-                    child: Text('System'),
+                    child: Text('System', style: _drawerItemStyle(context)),
                   ),
                 ],
                 onChanged: _setThemeMode,
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: Text(
-                'Font',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
+            _drawerFieldLabel(context, 'Font'),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: DropdownButton<AppFont>(
@@ -401,23 +383,14 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                       value: font,
                       child: Text(
                         font.label,
-                        style: TextStyle(fontFamily: font.fontFamily),
+                        style: font.style(_drawerItemStyle(context)),
                       ),
                     ),
                 ],
                 onChanged: _setFont,
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: Text(
-                'Text size',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
+            _drawerFieldLabel(context, 'Text size'),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: DropdownButton<TextSizeOption>(
@@ -427,7 +400,11 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                 underline: const SizedBox.shrink(),
                 items: [
                   for (final size in TextSizeOption.values)
-                    DropdownMenuItem(value: size, child: Text(size.label)),
+                    DropdownMenuItem(
+                      value: size,
+                      child:
+                          Text(size.label, style: _drawerItemStyle(context)),
+                    ),
                 ],
                 onChanged: _setTextSize,
               ),
@@ -436,7 +413,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             _drawerSectionLabel(context, 'Data'),
             ListTile(
               leading: const Icon(Icons.upload_file),
-              title: const Text('Import from Google Keep'),
+              title: Text(
+                'Import from Google Keep',
+                style: _drawerItemStyle(context),
+              ),
               onTap: () {
                 Navigator.pop(context);
                 _importFromKeep(context, ref);
@@ -445,7 +425,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             ListTile(
               key: const Key('import_markdown_item'),
               leading: const Icon(Icons.description_outlined),
-              title: const Text('Import from Markdown'),
+              title: Text(
+                'Import from Markdown',
+                style: _drawerItemStyle(context),
+              ),
               onTap: () {
                 Navigator.pop(context);
                 _importFromMarkdown(context, ref);
@@ -454,7 +437,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             ListTile(
               key: const Key('export_markdown_item'),
               leading: const Icon(Icons.folder_zip_outlined),
-              title: const Text('Export to Markdown'),
+              title: Text(
+                'Export to Markdown',
+                style: _drawerItemStyle(context),
+              ),
               subtitle: const Text('All notes, as a .zip'),
               onTap: () {
                 Navigator.pop(context);
@@ -469,7 +455,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                     ? Icons.cloud_done
                     : Icons.cloud_outlined,
               ),
-              title: const Text('Sync'),
+              title: Text('Sync', style: _drawerItemStyle(context)),
               subtitle: Text(
                 syncState.status == SyncStatus.connected
                     ? 'Connected as ${syncState.userEmail}'
@@ -491,16 +477,53 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     );
   }
 
+  /// A section grouping's own name ("Appearance", "Data") - the most
+  /// visually prominent text in the drawer's settings list (bar the brand
+  /// lockup at the top), so it reads as a clear anchor when scanning the
+  /// list rather than blending into the fields it groups.
   Widget _drawerSectionLabel(BuildContext context, String label) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.8,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+      ),
+    );
+  }
+
+  /// A caption naming what the control directly below it does ("Theme",
+  /// "Font", "Text size") - deliberately the smallest, most muted text in
+  /// the drawer, since it's read once and then the control itself takes
+  /// over.
+  Widget _drawerFieldLabel(BuildContext context, String label) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
       child: Text(
         label,
         style: TextStyle(
-          fontWeight: FontWeight.w600,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
+    );
+  }
+
+  /// The actual content of a dropdown option or a ListTile's title -
+  /// applied consistently so a selectable option looks the same size and
+  /// weight everywhere in the drawer, regardless of which widget renders
+  /// it (DropdownMenuItem vs. ListTile didn't otherwise agree on this at
+  /// all, one of the things that made the drawer's sizing feel arbitrary).
+  TextStyle _drawerItemStyle(BuildContext context) {
+    return TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w400,
+      color: Theme.of(context).colorScheme.onSurface,
     );
   }
 

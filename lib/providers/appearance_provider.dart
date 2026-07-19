@@ -1,4 +1,6 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const _fontPrefsKey = 'appearance_font';
@@ -8,19 +10,53 @@ const _textScalePrefsKey = 'appearance_text_scale';
 /// GoogleFonts.config.allowRuntimeFetching = false - these are the only
 /// choices because they're the only ones actually bundled offline).
 enum AppFont {
-  defaultFont('Default', 'Inter'),
-  serif('Serif', 'Lora'),
-  monospace('Monospace', 'RobotoMono'),
-  rounded('Rounded', 'Quicksand');
+  defaultFont('Default'),
+  serif('Serif'),
+  monospace('Monospace'),
+  rounded('Rounded');
 
-  const AppFont(this.label, this.fontFamily);
+  const AppFont(this.label);
 
   /// Shown in the Settings picker.
   final String label;
+}
 
-  /// Matches the bundled asset filenames (e.g. "Inter-Regular.ttf") and the
-  /// family name google_fonts registers them under.
-  final String fontFamily;
+/// Applies an [AppFont] via google_fonts' own per-font functions (not the
+/// bare fontFamily string / GoogleFonts.getFont dynamic lookup) - the
+/// dynamic lookup needs the font's official catalog name ("Roboto Mono",
+/// with a space), which differs from the asset-matching name
+/// ("RobotoMono", no space) used for the bundled files, and mixing the two
+/// up is exactly what silently no-ops instead of applying the font: a bare
+/// TextStyle(fontFamily: 'RobotoMono') never touches google_fonts' loading
+/// path at all, so nothing ever registers that family with Flutter, and it
+/// falls back to the ambient default with no error. Static per-font
+/// functions sidestep name-matching entirely and are compiler-checked.
+extension AppFontStyling on AppFont {
+  TextStyle style([TextStyle? textStyle]) {
+    switch (this) {
+      case AppFont.defaultFont:
+        return GoogleFonts.inter(textStyle: textStyle);
+      case AppFont.serif:
+        return GoogleFonts.lora(textStyle: textStyle);
+      case AppFont.monospace:
+        return GoogleFonts.robotoMono(textStyle: textStyle);
+      case AppFont.rounded:
+        return GoogleFonts.quicksand(textStyle: textStyle);
+    }
+  }
+
+  TextTheme textTheme([TextTheme? base]) {
+    switch (this) {
+      case AppFont.defaultFont:
+        return GoogleFonts.interTextTheme(base);
+      case AppFont.serif:
+        return GoogleFonts.loraTextTheme(base);
+      case AppFont.monospace:
+        return GoogleFonts.robotoMonoTextTheme(base);
+      case AppFont.rounded:
+        return GoogleFonts.quicksandTextTheme(base);
+    }
+  }
 }
 
 /// A small set of named steps rather than a free slider - easier to reason
