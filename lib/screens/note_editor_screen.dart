@@ -74,13 +74,22 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   }
 
   Future<void> _pickReminder() async {
-    final initial = _reminderAt ?? DateTime.now().add(const Duration(hours: 1));
+    final now = DateTime.now();
+    // An expired reminder can't be used as showDatePicker's initialDate -
+    // it violates the picker's own firstDate: now constraint (initialDate
+    // must be on or after firstDate), which would crash rather than let
+    // you reset it. Fall back to the same "an hour from now" default used
+    // when there's no reminder at all yet.
+    final initial =
+        (_reminderAt != null && _reminderAt!.isAfter(now))
+            ? _reminderAt!
+            : now.add(const Duration(hours: 1));
     final ctx = context;
     final date = await showDatePicker(
       context: ctx,
       initialDate: initial,
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 5)),
     );
     if (date == null || !mounted) return;
 
@@ -190,6 +199,46 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     });
   }
 
+  /// Tapping the reminder chip used to remove it outright with no way to
+  /// reconsider or edit it instead - this presents both choices explicitly,
+  /// wording the first option around whichever is actually true (a past
+  /// reminder can only be reset to a new time, not "edited" as if it were
+  /// still pending).
+  Future<void> _showReminderOptions() async {
+    final reminderAt = _reminderAt;
+    if (reminderAt == null) return;
+    final isExpired = !reminderAt.isAfter(DateTime.now());
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: Text(isExpired ? 'Reset reminder' : 'Edit reminder'),
+              onTap: () => Navigator.pop(sheetContext, 'edit'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.alarm_off_outlined),
+              title: const Text('Remove reminder'),
+              onTap: () => Navigator.pop(sheetContext, 'remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    switch (action) {
+      case 'edit':
+        await _pickReminder();
+      case 'remove':
+        _clearReminder();
+    }
+  }
+
   Future<void> _pickColor() async {
     final index = await showColorPickerSheet(context, selected: _colorIndex);
     if (index == null || !mounted) return;
@@ -242,12 +291,18 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
           actions: [
             if (_reminderAt != null)
               TextButton.icon(
-                icon: Icon(Icons.alarm, color: textColor, size: 16),
+                icon: Icon(
+                  _reminderAt!.isAfter(DateTime.now())
+                      ? Icons.alarm
+                      : Icons.alarm_off,
+                  color: textColor,
+                  size: 16,
+                ),
                 label: Text(
                   DateFormat('MMM d, h:mm a').format(_reminderAt!),
                   style: TextStyle(color: textColor, fontSize: 12),
                 ),
-                onPressed: _clearReminder,
+                onPressed: _showReminderOptions,
               ),
           ],
         ),

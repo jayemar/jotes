@@ -6,13 +6,14 @@ import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/note_editor_screen.dart';
 import 'package:jotes/widgets/note_body_editor.dart';
 
-Note _existingNote({String body = 'One line'}) {
+Note _existingNote({String body = 'One line', DateTime? reminderAt}) {
   final now = DateTime.now();
   return Note(
     id: 'existing-1',
     title: 'Title',
     body: body,
     colorIndex: 0,
+    reminderAt: reminderAt,
     created: now,
     updated: now,
   );
@@ -145,5 +146,99 @@ void main() {
     expect(notifier.saved.single.title, isEmpty);
     expect(notifier.saved.single.body, isEmpty);
     expect(notifier.saved.single.reminderAt, isNotNull);
+  });
+
+  testWidgets(
+      'tapping the reminder chip for an upcoming reminder offers to edit '
+      'or remove it, rather than removing it outright', (tester) async {
+    final note = _existingNote(
+      reminderAt: DateTime.now().add(const Duration(hours: 1)),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(home: NoteEditorScreen(existing: note)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.alarm));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edit reminder'), findsOneWidget);
+    expect(find.text('Reset reminder'), findsNothing);
+    expect(find.text('Remove reminder'), findsOneWidget);
+  });
+
+  testWidgets('choosing Remove from the reminder options clears the chip',
+      (tester) async {
+    final note = _existingNote(
+      reminderAt: DateTime.now().add(const Duration(hours: 1)),
+    );
+    final notifier = _RecordingNotesNotifier();
+    final container = ProviderContainer(
+      overrides: [notesProvider.overrideWith(() => notifier)],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(home: NoteEditorScreen(existing: note)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.alarm));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove reminder'));
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.alarm), findsNothing);
+    expect(find.byIcon(Icons.alarm_off), findsNothing);
+  });
+
+  testWidgets(
+      'the reminder chip for an expired reminder offers to reset it '
+      '(not "edit", since it is no longer pending), and resetting it '
+      'through the picker succeeds instead of crashing on the picker\'s '
+      'own initialDate/firstDate constraint', (tester) async {
+    final note = _existingNote(
+      reminderAt: DateTime.now().subtract(const Duration(days: 1)),
+    );
+    final notifier = _RecordingNotesNotifier();
+    final container = ProviderContainer(
+      overrides: [notesProvider.overrideWith(() => notifier)],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(home: NoteEditorScreen(existing: note)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The chip itself should already reflect the expired state.
+    expect(find.byIcon(Icons.alarm_off), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.alarm_off));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reset reminder'), findsOneWidget);
+    expect(find.text('Edit reminder'), findsNothing);
+
+    await tester.tap(find.text('Reset reminder'));
+    await tester.pumpAndSettle();
+    // Confirming the date and time pickers must not throw despite the
+    // note's existing reminder being in the past.
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    expect(notifier.saved, isNotEmpty);
+    expect(
+      notifier.saved.last.reminderAt!.isAfter(DateTime.now()),
+      isTrue,
+    );
   });
 }
