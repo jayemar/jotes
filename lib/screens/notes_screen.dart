@@ -6,7 +6,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
+import '../build_info.dart';
 import '../models/note.dart';
+import '../providers/app_info_provider.dart';
 import '../providers/appearance_provider.dart';
 import '../providers/notes_provider.dart';
 import '../providers/sync_provider.dart';
@@ -42,8 +44,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     // Existing notes may already have reminders that can never fire if
     // notifications are disabled - surface that here, not only reactively
     // when the user next tries to set one (note_editor_screen.dart).
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _checkNotificationsEnabled());
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _checkNotificationsEnabled(),
+    );
 
     // NoteCard's reminder chip switches from green (upcoming) to red (past)
     // by comparing reminderAt to DateTime.now() on every build - correct,
@@ -52,8 +55,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     // unrelated event (editing a note, a sync update) happens to rebuild
     // the grid. This timer's only job is to periodically force that
     // rebuild so the chip's own already-correct logic gets re-evaluated.
-    _reminderChipRefreshTimer =
-        Timer.periodic(const Duration(seconds: 30), (_) {
+    _reminderChipRefreshTimer = Timer.periodic(const Duration(seconds: 30), (
+      _,
+    ) {
       if (mounted) setState(() {});
     });
   }
@@ -105,9 +109,11 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     if (_searchQuery.isEmpty) return notes;
     final q = _searchQuery.toLowerCase();
     return notes
-        .where((n) =>
-            n.title.toLowerCase().contains(q) ||
-            n.body.toLowerCase().contains(q))
+        .where(
+          (n) =>
+              n.title.toLowerCase().contains(q) ||
+              n.body.toLowerCase().contains(q),
+        )
         .toList();
   }
 
@@ -190,9 +196,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     final searchFieldColor = noteColorFor(context, 0);
     final searchFieldTextColor =
         ThemeData.estimateBrightnessForColor(searchFieldColor) ==
-                Brightness.dark
-            ? Colors.white
-            : Colors.black87;
+            Brightness.dark
+        ? Colors.white
+        : Colors.black87;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -237,12 +243,14 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                     child: TextField(
                       key: const Key('search_field'),
                       controller: _searchCtrl,
+                      textAlignVertical: TextAlignVertical.center,
                       decoration: InputDecoration(
                         hintText: 'Search notes',
-                        hintStyle:
-                            TextStyle(color: searchFieldTextColor.withAlpha(140)),
+                        hintStyle: TextStyle(
+                          color: searchFieldTextColor.withAlpha(140),
+                        ),
                         border: InputBorder.none,
-                        isDense: true,
+                        isCollapsed: true,
                       ),
                       style: TextStyle(
                         color: searchFieldTextColor,
@@ -316,137 +324,156 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
 
     return Drawer(
       child: SafeArea(
-        child: ListView(
+        // `minimum` guarantees breathing room below the pinned Sync/version
+        // footer even on devices where the system nav bar's reported inset
+        // doesn't fully cover its own visual footprint (seen on a tablet
+        // with an on-screen nav bar overlapping the drawer's last row).
+        minimum: const EdgeInsets.only(bottom: 12),
+        child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
+            Expanded(
+              child: ListView(
                 children: [
-                  Text(
-                    'J',
-                    style: TextStyle(
-                      fontFamily: 'Pacifico',
-                      fontSize: 32,
-                      color: Theme.of(context).colorScheme.primary,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'J',
+                          style: TextStyle(
+                            fontFamily: 'Pacifico',
+                            fontSize: 32,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Text(
+                          'jotes',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w400,
+                            color: onSurface,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'jotes',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w400,
-                      color: onSurface,
+                  const Divider(height: 1),
+                  _drawerSectionLabel(context, 'Appearance'),
+                  _drawerFieldLabel(context, 'Theme'),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: DropdownButton<ThemeMode>(
+                      key: const Key('theme_dropdown'),
+                      value: themeMode,
+                      isExpanded: true,
+                      underline: const SizedBox.shrink(),
+                      items: [
+                        DropdownMenuItem(
+                          value: ThemeMode.light,
+                          child: Text(
+                            'Light',
+                            style: _drawerItemStyle(context),
+                          ),
+                        ),
+                        DropdownMenuItem(
+                          value: ThemeMode.dark,
+                          child: Text('Dark', style: _drawerItemStyle(context)),
+                        ),
+                        DropdownMenuItem(
+                          value: ThemeMode.system,
+                          child: Text(
+                            'System',
+                            style: _drawerItemStyle(context),
+                          ),
+                        ),
+                      ],
+                      onChanged: _setThemeMode,
                     ),
+                  ),
+                  _drawerFieldLabel(context, 'Font'),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: DropdownButton<AppFont>(
+                      key: const Key('font_dropdown'),
+                      value: appearance.font,
+                      isExpanded: true,
+                      underline: const SizedBox.shrink(),
+                      items: [
+                        for (final font in AppFont.values)
+                          DropdownMenuItem(
+                            value: font,
+                            child: Text(
+                              font.label,
+                              style: font.style(_drawerItemStyle(context)),
+                            ),
+                          ),
+                      ],
+                      onChanged: _setFont,
+                    ),
+                  ),
+                  _drawerFieldLabel(context, 'Text size'),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: DropdownButton<TextSizeOption>(
+                      key: const Key('text_size_dropdown'),
+                      value: appearance.textSize,
+                      isExpanded: true,
+                      underline: const SizedBox.shrink(),
+                      items: [
+                        for (final size in TextSizeOption.values)
+                          DropdownMenuItem(
+                            value: size,
+                            child: Text(
+                              size.label,
+                              style: _drawerItemStyle(context),
+                            ),
+                          ),
+                      ],
+                      onChanged: _setTextSize,
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  _drawerSectionLabel(context, 'Data'),
+                  ListTile(
+                    leading: const Icon(Icons.upload_file),
+                    title: Text(
+                      'Import from Google Keep',
+                      style: _drawerItemStyle(context),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _importFromKeep(context, ref);
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('import_markdown_item'),
+                    leading: const Icon(Icons.description_outlined),
+                    title: Text(
+                      'Import from Markdown',
+                      style: _drawerItemStyle(context),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _importFromMarkdown(context, ref);
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('export_markdown_item'),
+                    leading: const Icon(Icons.folder_zip_outlined),
+                    title: Text(
+                      'Export to Markdown',
+                      style: _drawerItemStyle(context),
+                    ),
+                    subtitle: const Text('All notes, as a .zip'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _exportNotesToMarkdown(context, notes);
+                    },
                   ),
                 ],
               ),
-            ),
-            const Divider(height: 1),
-            _drawerSectionLabel(context, 'Appearance'),
-            _drawerFieldLabel(context, 'Theme'),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: DropdownButton<ThemeMode>(
-                key: const Key('theme_dropdown'),
-                value: themeMode,
-                isExpanded: true,
-                underline: const SizedBox.shrink(),
-                items: [
-                  DropdownMenuItem(
-                    value: ThemeMode.light,
-                    child: Text('Light', style: _drawerItemStyle(context)),
-                  ),
-                  DropdownMenuItem(
-                    value: ThemeMode.dark,
-                    child: Text('Dark', style: _drawerItemStyle(context)),
-                  ),
-                  DropdownMenuItem(
-                    value: ThemeMode.system,
-                    child: Text('System', style: _drawerItemStyle(context)),
-                  ),
-                ],
-                onChanged: _setThemeMode,
-              ),
-            ),
-            _drawerFieldLabel(context, 'Font'),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: DropdownButton<AppFont>(
-                key: const Key('font_dropdown'),
-                value: appearance.font,
-                isExpanded: true,
-                underline: const SizedBox.shrink(),
-                items: [
-                  for (final font in AppFont.values)
-                    DropdownMenuItem(
-                      value: font,
-                      child: Text(
-                        font.label,
-                        style: font.style(_drawerItemStyle(context)),
-                      ),
-                    ),
-                ],
-                onChanged: _setFont,
-              ),
-            ),
-            _drawerFieldLabel(context, 'Text size'),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: DropdownButton<TextSizeOption>(
-                key: const Key('text_size_dropdown'),
-                value: appearance.textSize,
-                isExpanded: true,
-                underline: const SizedBox.shrink(),
-                items: [
-                  for (final size in TextSizeOption.values)
-                    DropdownMenuItem(
-                      value: size,
-                      child:
-                          Text(size.label, style: _drawerItemStyle(context)),
-                    ),
-                ],
-                onChanged: _setTextSize,
-              ),
-            ),
-            const Divider(height: 1),
-            _drawerSectionLabel(context, 'Data'),
-            ListTile(
-              leading: const Icon(Icons.upload_file),
-              title: Text(
-                'Import from Google Keep',
-                style: _drawerItemStyle(context),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _importFromKeep(context, ref);
-              },
-            ),
-            ListTile(
-              key: const Key('import_markdown_item'),
-              leading: const Icon(Icons.description_outlined),
-              title: Text(
-                'Import from Markdown',
-                style: _drawerItemStyle(context),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _importFromMarkdown(context, ref);
-              },
-            ),
-            ListTile(
-              key: const Key('export_markdown_item'),
-              leading: const Icon(Icons.folder_zip_outlined),
-              title: Text(
-                'Export to Markdown',
-                style: _drawerItemStyle(context),
-              ),
-              subtitle: const Text('All notes, as a .zip'),
-              onTap: () {
-                Navigator.pop(context);
-                _exportNotesToMarkdown(context, notes);
-              },
             ),
             const Divider(height: 1),
             ListTile(
@@ -466,12 +493,11 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                 Navigator.pop(context);
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (_) => const SyncSettingsScreen(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const SyncSettingsScreen()),
                 );
               },
             ),
+            _drawerVersionFooter(context),
           ],
         ),
       ),
@@ -515,6 +541,29 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     );
   }
 
+  /// Version + build timestamp, pinned under the Sync row at the very
+  /// bottom of the drawer - useful for confirming which build is actually
+  /// installed on a given device, separate from the app's own settings.
+  Widget _drawerVersionFooter(BuildContext context) {
+    final packageInfoAsync = ref.watch(packageInfoProvider);
+    final versionText = packageInfoAsync.when(
+      data: (info) => 'v${info.version} (${info.buildNumber})',
+      loading: () => '',
+      error: (_, _) => '',
+    );
+    final parts = [versionText, buildTimestamp].where((s) => s.isNotEmpty);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Text(
+        parts.join(' · '),
+        style: TextStyle(
+          fontSize: 11,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
   /// The actual content of a dropdown option or a ListTile's title -
   /// applied consistently so a selectable option looks the same size and
   /// weight everywhere in the drawer, regardless of which widget renders
@@ -546,9 +595,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   void _openNote(BuildContext context, WidgetRef ref, Note? note) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => NoteEditorScreen(existing: note),
-      ),
+      MaterialPageRoute(builder: (_) => NoteEditorScreen(existing: note)),
     ).then((_) => ref.invalidate(notesProvider));
   }
 
@@ -626,9 +673,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     List<Note> notes,
   ) async {
     if (notes.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No notes to export.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No notes to export.')));
       return;
     }
 
@@ -686,21 +733,17 @@ class _NoteGrid extends StatelessWidget {
         ),
         mainAxisSpacing: 8,
         crossAxisSpacing: 8,
-        delegate: SliverChildBuilderDelegate(
-          (context, i) {
-            final note = notes[i];
-            return NoteCard(
-              note: note,
-              selected: selectedIds.contains(note.id),
-              selectionMode: selectionMode,
-              onTap: () => selectionMode
-                  ? onToggleSelection(note.id)
-                  : onOpen(note),
-              onLongPress: () => onToggleSelection(note.id),
-            );
-          },
-          childCount: notes.length,
-        ),
+        delegate: SliverChildBuilderDelegate((context, i) {
+          final note = notes[i];
+          return NoteCard(
+            note: note,
+            selected: selectedIds.contains(note.id),
+            selectionMode: selectionMode,
+            onTap: () =>
+                selectionMode ? onToggleSelection(note.id) : onOpen(note),
+            onLongPress: () => onToggleSelection(note.id),
+          );
+        }, childCount: notes.length),
       ),
     );
   }

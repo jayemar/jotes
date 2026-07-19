@@ -80,10 +80,9 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     // must be on or after firstDate), which would crash rather than let
     // you reset it. Fall back to the same "an hour from now" default used
     // when there's no reminder at all yet.
-    final initial =
-        (_reminderAt != null && _reminderAt!.isAfter(now))
-            ? _reminderAt!
-            : now.add(const Duration(hours: 1));
+    final initial = (_reminderAt != null && _reminderAt!.isAfter(now))
+        ? _reminderAt!
+        : now.add(const Duration(hours: 1));
     final ctx = context;
     final date = await showDatePicker(
       context: ctx,
@@ -93,12 +92,20 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     );
     if (date == null || !mounted) return;
 
-    // ignore: use_build_context_synchronously
-    final time = await showTimePicker(context: ctx, initialTime: TimeOfDay.fromDateTime(initial));
+    final time = await showTimePicker(
+      // ignore: use_build_context_synchronously
+      context: ctx,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
     if (time == null || !mounted) return;
 
-    final reminderAt =
-        DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    final reminderAt = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
     setState(() {
       _reminderAt = reminderAt;
       _dirty = true;
@@ -142,7 +149,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     // exact-alarm scheduling), and Android will silently drop a scheduled
     // notification with no error if this is off, so it needs its own
     // explicit check rather than assuming exact-alarm status covers it.
-    final notifsEnabled = await NotificationService.instance.notificationsEnabled();
+    final notifsEnabled = await NotificationService.instance
+        .notificationsEnabled();
     if (!mounted) return;
     if (!notifsEnabled) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -161,8 +169,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       return;
     }
 
-    final exactAlarmsPermitted =
-        await NotificationService.instance.exactAlarmsPermitted();
+    final exactAlarmsPermitted = await NotificationService.instance
+        .exactAlarmsPermitted();
     if (!mounted) return;
     if (!exactAlarmsPermitted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -292,8 +300,9 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
             _ReminderPillButton(
               reminderAt: _reminderAt,
               iconColor: textColor,
-              onPressed:
-                  _reminderAt == null ? _pickReminder : _showReminderOptions,
+              onPressed: _reminderAt == null
+                  ? _pickReminder
+                  : _showReminderOptions,
             ),
             const SizedBox(width: 8),
           ],
@@ -335,31 +344,37 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                 ),
               ),
             ),
-            Container(
-              decoration: BoxDecoration(
-                color: bgColor,
-                border:
-                    const Border(top: BorderSide(color: Colors.black12)),
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.palette_outlined, color: textColor),
-                    onPressed: _pickColor,
-                    tooltip: 'Change color',
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.check_box_outlined, color: textColor),
-                    onPressed: () =>
-                        _bodyEditorKey.currentState?.addChecklistItem(),
-                    tooltip: 'Add checklist item',
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.ios_share_outlined, color: textColor),
-                    onPressed: _exportToMarkdown,
-                    tooltip: 'Export as Markdown',
-                  ),
-                ],
+            SafeArea(
+              top: false,
+              // On a device with an on-screen nav bar, this row otherwise
+              // sits flush against it with no margin, the same class of
+              // problem seen in the drawer's pinned bottom section.
+              minimum: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: bgColor,
+                  border: const Border(top: BorderSide(color: Colors.black12)),
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.palette_outlined, color: textColor),
+                      onPressed: _pickColor,
+                      tooltip: 'Change color',
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.check_box_outlined, color: textColor),
+                      onPressed: () =>
+                          _bodyEditorKey.currentState?.addChecklistItem(),
+                      tooltip: 'Add checklist item',
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.ios_share_outlined, color: textColor),
+                      onPressed: _exportToMarkdown,
+                      tooltip: 'Export as Markdown',
+                    ),
+                  ],
+                ),
               ),
             ),
           ],

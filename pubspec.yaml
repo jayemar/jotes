@@ -46,6 +46,7 @@ dependencies:
   unifiedpush: ^6.2.0
   google_fonts: ^8.2.0
   flutter_staggered_grid_view: ^0.7.0
+  package_info_plus: ^9.0.1
 
 dev_dependencies:
   flutter_test:

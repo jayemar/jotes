@@ -20,9 +20,10 @@ while getopts "t:" opt; do
 done
 
 APP_VERSION=$(awk '/^version:/{print $2}' pubspec.yaml | cut -d'+' -f1)
+BUILD_TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 
 echo "Building ${BUILD_TYPE} APK (version ${APP_VERSION})..."
-flutter build apk "--${BUILD_TYPE}"
+flutter build apk "--${BUILD_TYPE}" --dart-define="BUILD_TIMESTAMP=${BUILD_TIMESTAMP}"
 
 APK_PATH="build/app/outputs/flutter-apk/app-${BUILD_TYPE}.apk"
 echo "APK: ${PROJECT_DIR}/${APK_PATH} ($(du -h "$APK_PATH" | cut -f1))"
