@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
+import 'package:flutter/foundation.dart'
+    show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +13,7 @@ import 'services/db_service.dart';
 import 'services/notification_service.dart';
 import 'services/pb_service.dart';
 import 'services/unifiedpush_service.dart';
+import 'theme/app_text_styles.dart';
 import 'widgets/reminder_popup.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -33,8 +35,9 @@ void main(List<String> args) async {
   GoogleFonts.config.allowRuntimeFetching = false;
   LicenseRegistry.addLicense(() async* {
     for (final family in ['Inter', 'Lora', 'RobotoMono', 'Quicksand']) {
-      final license = await rootBundle
-          .loadString('assets/google_fonts/licenses/$family-OFL.txt');
+      final license = await rootBundle.loadString(
+        'assets/google_fonts/licenses/$family-OFL.txt',
+      );
       yield LicenseEntryWithLineBreaks([family], license);
     }
   });
@@ -64,8 +67,9 @@ class _JotesAppState extends ConsumerState<JotesApp> {
   @override
   void initState() {
     super.initState();
-    _tapSubscription =
-        NotificationService.instance.onNoteTapped.listen(_openNoteById);
+    _tapSubscription = NotificationService.instance.onNoteTapped.listen(
+      _openNoteById,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final launchNoteId = await NotificationService.instance.getLaunchNoteId();
       if (launchNoteId != null) _openNoteById(launchNoteId);
@@ -114,9 +118,11 @@ class _JotesAppState extends ConsumerState<JotesApp> {
       themeMode: themeMode,
       theme: lightBase.copyWith(
         textTheme: appearance.font.textTheme(lightBase.textTheme),
+        extensions: [AppTextStyles.fromColorScheme(lightBase.colorScheme)],
       ),
       darkTheme: darkBase.copyWith(
         textTheme: appearance.font.textTheme(darkBase.textTheme),
+        extensions: [AppTextStyles.fromColorScheme(darkBase.colorScheme)],
       ),
       // The text-size setting is a deliberate app-level override, not a
       // multiplier on top of the system's own accessibility text scale -
@@ -124,9 +130,9 @@ class _JotesAppState extends ConsumerState<JotesApp> {
       // consistent with how the font choice above is also an override
       // rather than a system-setting-aware adjustment.
       builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(
-          textScaler: TextScaler.linear(appearance.textSize.scale),
-        ),
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(appearance.textSize.scale)),
         child: child!,
       ),
       home: const NotesScreen(),

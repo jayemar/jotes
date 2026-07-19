@@ -9,17 +9,18 @@ import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import '../build_info.dart';
 import '../models/note.dart';
 import '../providers/app_info_provider.dart';
-import '../providers/appearance_provider.dart';
 import '../providers/notes_provider.dart';
 import '../providers/sync_provider.dart';
-import '../providers/theme_provider.dart';
 import '../services/keep_import_service.dart';
 import '../services/markdown_export_service.dart';
 import '../services/markdown_import_service.dart';
 import '../services/notification_service.dart';
+import '../theme/app_text_styles.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_card.dart';
+import '../widgets/settings_labels.dart';
 import 'note_editor_screen.dart';
+import 'settings_screen.dart';
 import 'sync_settings_screen.dart';
 
 class NotesScreen extends ConsumerStatefulWidget {
@@ -320,8 +321,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
 
   Widget _buildDrawer(BuildContext context, List<Note> notes) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
-    final themeMode = ref.watch(themeModeProvider);
-    final appearance = ref.watch(appearanceProvider);
+    final itemStyle = AppTextStyles.of(context).item;
     final syncState = ref.watch(syncProvider);
 
     return Drawer(
@@ -362,103 +362,25 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                     ),
                   ),
                   const Divider(height: 1),
-                  _drawerSectionLabel(context, 'Appearance'),
-                  _drawerFieldLabel(context, 'Theme'),
-                  LayoutBuilder(
-                    builder: (context, constraints) => Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: DropdownButton<ThemeMode>(
-                        key: const Key('theme_dropdown'),
-                        value: themeMode,
-                        isExpanded: true,
-                        // The drawer is narrower than DropdownButton's default
-                        // menu-width assumption, so without this the opened
-                        // menu rendered wider than the drawer itself.
-                        menuWidth: constraints.maxWidth - 32,
-                        underline: const SizedBox.shrink(),
-                        items: [
-                          DropdownMenuItem(
-                            value: ThemeMode.light,
-                            child: Text(
-                              'Light',
-                              style: _drawerItemStyle(context),
-                            ),
-                          ),
-                          DropdownMenuItem(
-                            value: ThemeMode.dark,
-                            child: Text(
-                              'Dark',
-                              style: _drawerItemStyle(context),
-                            ),
-                          ),
-                          DropdownMenuItem(
-                            value: ThemeMode.system,
-                            child: Text(
-                              'System',
-                              style: _drawerItemStyle(context),
-                            ),
-                          ),
-                        ],
-                        onChanged: _setThemeMode,
-                      ),
-                    ),
-                  ),
-                  _drawerFieldLabel(context, 'Font'),
-                  LayoutBuilder(
-                    builder: (context, constraints) => Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: DropdownButton<AppFont>(
-                        key: const Key('font_dropdown'),
-                        value: appearance.font,
-                        isExpanded: true,
-                        menuWidth: constraints.maxWidth - 32,
-                        underline: const SizedBox.shrink(),
-                        items: [
-                          for (final font in AppFont.values)
-                            DropdownMenuItem(
-                              value: font,
-                              child: Text(
-                                font.label,
-                                style: font.style(_drawerItemStyle(context)),
-                              ),
-                            ),
-                        ],
-                        onChanged: _setFont,
-                      ),
-                    ),
-                  ),
-                  _drawerFieldLabel(context, 'Text size'),
-                  LayoutBuilder(
-                    builder: (context, constraints) => Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: DropdownButton<TextSizeOption>(
-                        key: const Key('text_size_dropdown'),
-                        value: appearance.textSize,
-                        isExpanded: true,
-                        menuWidth: constraints.maxWidth - 32,
-                        underline: const SizedBox.shrink(),
-                        items: [
-                          for (final size in TextSizeOption.values)
-                            DropdownMenuItem(
-                              value: size,
-                              child: Text(
-                                size.label,
-                                style: _drawerItemStyle(context),
-                              ),
-                            ),
-                        ],
-                        onChanged: _setTextSize,
-                      ),
-                    ),
+                  ListTile(
+                    key: const Key('settings_drawer_item'),
+                    leading: const Icon(Icons.settings_outlined),
+                    title: Text('Settings', style: itemStyle),
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SettingsScreen(),
+                        ),
+                      );
+                    },
                   ),
                   const Divider(height: 1),
-                  _drawerSectionLabel(context, 'Data'),
+                  const SectionLabel('Data'),
                   ListTile(
                     leading: const Icon(Icons.upload_file),
-                    title: Text(
-                      'Import from Google Keep',
-                      style: _drawerItemStyle(context),
-                    ),
+                    title: Text('Import from Google Keep', style: itemStyle),
                     onTap: () {
                       Navigator.pop(context);
                       _importFromKeep(context, ref);
@@ -467,10 +389,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   ListTile(
                     key: const Key('import_markdown_item'),
                     leading: const Icon(Icons.description_outlined),
-                    title: Text(
-                      'Import from Markdown',
-                      style: _drawerItemStyle(context),
-                    ),
+                    title: Text('Import from Markdown', style: itemStyle),
                     onTap: () {
                       Navigator.pop(context);
                       _importFromMarkdown(context, ref);
@@ -479,10 +398,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   ListTile(
                     key: const Key('export_markdown_item'),
                     leading: const Icon(Icons.folder_zip_outlined),
-                    title: Text(
-                      'Export to Markdown',
-                      style: _drawerItemStyle(context),
-                    ),
+                    title: Text('Export to Markdown', style: itemStyle),
                     subtitle: const Text('All notes, as a .zip'),
                     onTap: () {
                       Navigator.pop(context);
@@ -500,7 +416,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                     ? Icons.cloud_done
                     : Icons.cloud_outlined,
               ),
-              title: Text('Sync', style: _drawerItemStyle(context)),
+              title: Text('Sync', style: itemStyle),
               subtitle: Text(
                 syncState.status == SyncStatus.connected
                     ? 'Connected as ${syncState.userEmail}'
@@ -522,42 +438,6 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   }
 
   /// A section grouping's own name ("Appearance", "Data") - the most
-  /// visually prominent text in the drawer's settings list (bar the brand
-  /// lockup at the top), so it reads as a clear anchor when scanning the
-  /// list rather than blending into the fields it groups.
-  Widget _drawerSectionLabel(BuildContext context, String label) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-      child: Text(
-        label.toUpperCase(),
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-      ),
-    );
-  }
-
-  /// A caption naming what the control directly below it does ("Theme",
-  /// "Font", "Text size") - deliberately the smallest, most muted text in
-  /// the drawer, since it's read once and then the control itself takes
-  /// over.
-  Widget _drawerFieldLabel(BuildContext context, String label) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-
   /// Version + build timestamp, pinned under the Sync row at the very
   /// bottom of the drawer - useful for confirming which build is actually
   /// installed on a given device, separate from the app's own settings.
@@ -579,34 +459,6 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
         ),
       ),
     );
-  }
-
-  /// The actual content of a dropdown option or a ListTile's title -
-  /// applied consistently so a selectable option looks the same size and
-  /// weight everywhere in the drawer, regardless of which widget renders
-  /// it (DropdownMenuItem vs. ListTile didn't otherwise agree on this at
-  /// all, one of the things that made the drawer's sizing feel arbitrary).
-  TextStyle _drawerItemStyle(BuildContext context) {
-    return TextStyle(
-      fontSize: 15,
-      fontWeight: FontWeight.w400,
-      color: Theme.of(context).colorScheme.onSurface,
-    );
-  }
-
-  void _setThemeMode(ThemeMode? mode) {
-    if (mode == null) return;
-    ref.read(themeModeProvider.notifier).setThemeMode(mode);
-  }
-
-  void _setFont(AppFont? font) {
-    if (font == null) return;
-    ref.read(appearanceProvider.notifier).setFont(font);
-  }
-
-  void _setTextSize(TextSizeOption? size) {
-    if (size == null) return;
-    ref.read(appearanceProvider.notifier).setTextSize(size);
   }
 
   void _openNote(BuildContext context, WidgetRef ref, Note? note) {
