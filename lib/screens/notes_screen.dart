@@ -235,6 +235,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   )
                 : Container(
                     height: 42,
+                    alignment: Alignment.center,
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     decoration: BoxDecoration(
                       color: searchFieldColor,
@@ -362,76 +363,91 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   const Divider(height: 1),
                   _drawerSectionLabel(context, 'Appearance'),
                   _drawerFieldLabel(context, 'Theme'),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: DropdownButton<ThemeMode>(
-                      key: const Key('theme_dropdown'),
-                      value: themeMode,
-                      isExpanded: true,
-                      underline: const SizedBox.shrink(),
-                      items: [
-                        DropdownMenuItem(
-                          value: ThemeMode.light,
-                          child: Text(
-                            'Light',
-                            style: _drawerItemStyle(context),
-                          ),
-                        ),
-                        DropdownMenuItem(
-                          value: ThemeMode.dark,
-                          child: Text('Dark', style: _drawerItemStyle(context)),
-                        ),
-                        DropdownMenuItem(
-                          value: ThemeMode.system,
-                          child: Text(
-                            'System',
-                            style: _drawerItemStyle(context),
-                          ),
-                        ),
-                      ],
-                      onChanged: _setThemeMode,
-                    ),
-                  ),
-                  _drawerFieldLabel(context, 'Font'),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: DropdownButton<AppFont>(
-                      key: const Key('font_dropdown'),
-                      value: appearance.font,
-                      isExpanded: true,
-                      underline: const SizedBox.shrink(),
-                      items: [
-                        for (final font in AppFont.values)
+                  LayoutBuilder(
+                    builder: (context, constraints) => Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: DropdownButton<ThemeMode>(
+                        key: const Key('theme_dropdown'),
+                        value: themeMode,
+                        isExpanded: true,
+                        // The drawer is narrower than DropdownButton's default
+                        // menu-width assumption, so without this the opened
+                        // menu rendered wider than the drawer itself.
+                        menuWidth: constraints.maxWidth - 32,
+                        underline: const SizedBox.shrink(),
+                        items: [
                           DropdownMenuItem(
-                            value: font,
+                            value: ThemeMode.light,
                             child: Text(
-                              font.label,
-                              style: font.style(_drawerItemStyle(context)),
-                            ),
-                          ),
-                      ],
-                      onChanged: _setFont,
-                    ),
-                  ),
-                  _drawerFieldLabel(context, 'Text size'),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: DropdownButton<TextSizeOption>(
-                      key: const Key('text_size_dropdown'),
-                      value: appearance.textSize,
-                      isExpanded: true,
-                      underline: const SizedBox.shrink(),
-                      items: [
-                        for (final size in TextSizeOption.values)
-                          DropdownMenuItem(
-                            value: size,
-                            child: Text(
-                              size.label,
+                              'Light',
                               style: _drawerItemStyle(context),
                             ),
                           ),
-                      ],
-                      onChanged: _setTextSize,
+                          DropdownMenuItem(
+                            value: ThemeMode.dark,
+                            child: Text(
+                              'Dark',
+                              style: _drawerItemStyle(context),
+                            ),
+                          ),
+                          DropdownMenuItem(
+                            value: ThemeMode.system,
+                            child: Text(
+                              'System',
+                              style: _drawerItemStyle(context),
+                            ),
+                          ),
+                        ],
+                        onChanged: _setThemeMode,
+                      ),
+                    ),
+                  ),
+                  _drawerFieldLabel(context, 'Font'),
+                  LayoutBuilder(
+                    builder: (context, constraints) => Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: DropdownButton<AppFont>(
+                        key: const Key('font_dropdown'),
+                        value: appearance.font,
+                        isExpanded: true,
+                        menuWidth: constraints.maxWidth - 32,
+                        underline: const SizedBox.shrink(),
+                        items: [
+                          for (final font in AppFont.values)
+                            DropdownMenuItem(
+                              value: font,
+                              child: Text(
+                                font.label,
+                                style: font.style(_drawerItemStyle(context)),
+                              ),
+                            ),
+                        ],
+                        onChanged: _setFont,
+                      ),
+                    ),
+                  ),
+                  _drawerFieldLabel(context, 'Text size'),
+                  LayoutBuilder(
+                    builder: (context, constraints) => Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: DropdownButton<TextSizeOption>(
+                        key: const Key('text_size_dropdown'),
+                        value: appearance.textSize,
+                        isExpanded: true,
+                        menuWidth: constraints.maxWidth - 32,
+                        underline: const SizedBox.shrink(),
+                        items: [
+                          for (final size in TextSizeOption.values)
+                            DropdownMenuItem(
+                              value: size,
+                              child: Text(
+                                size.label,
+                                style: _drawerItemStyle(context),
+                              ),
+                            ),
+                        ],
+                        onChanged: _setTextSize,
+                      ),
                     ),
                   ),
                   const Divider(height: 1),
