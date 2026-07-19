@@ -206,6 +206,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
       drawer: _buildDrawer(context, notes),
       body: CustomScrollView(
         slivers: [
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
           SliverAppBar(
             floating: true,
             snap: true,
