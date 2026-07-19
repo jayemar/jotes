@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/note.dart';
+import 'note_body_editor.dart' show ChecklistBodyBlock, TextBodyBlock, parseBody;
 
 class NoteCard extends StatelessWidget {
   final Note note;
@@ -31,7 +32,7 @@ class NoteCard extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           color: color,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: selected
                 ? Colors.blue
@@ -39,43 +40,31 @@ class NoteCard extends StatelessWidget {
             width: selected ? 2.5 : 0.5,
           ),
         ),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Stack(
           children: [
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 if (note.title.isNotEmpty) ...[
                   Text(
                     note.title,
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
-                      fontSize: 14,
+                      fontSize: 15,
                       color: textColor,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                 ],
                 if (note.body.isNotEmpty)
-                  Flexible(
-                    child: Text(
-                      note.body,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: textColor.withAlpha(220),
-                      ),
-                      maxLines: 10,
-                      overflow: TextOverflow.fade,
-                    ),
-                  ),
+                  _NoteBodyPreview(body: note.body, textColor: textColor),
                 if (note.reminderAt != null) ...[
                   const SizedBox(height: 8),
-                  _ReminderChip(
-                    reminderAt: note.reminderAt!,
-                    textColor: textColor,
-                  ),
+                  _ReminderChip(reminderAt: note.reminderAt!, textColor: textColor),
                 ],
               ],
             ),
@@ -91,6 +80,90 @@ class NoteCard extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Renders a note's body as mixed text/checklist blocks, matching how it
+/// actually edits (see NoteBodyEditor) - a checklist item shows a real
+/// (read-only; tapping the whole card opens the note, not the box) checkbox
+/// glyph rather than the raw "- [ ] " markdown syntax, the same way Google
+/// Keep's own card previews do. Capped at a modest total line count so one
+/// very long note doesn't dominate the masonry grid.
+class _NoteBodyPreview extends StatelessWidget {
+  final String body;
+  final Color textColor;
+
+  const _NoteBodyPreview({required this.body, required this.textColor});
+
+  static const _maxPreviewLines = 8;
+
+  @override
+  Widget build(BuildContext context) {
+    final blocks = parseBody(body);
+    final children = <Widget>[];
+    var linesUsed = 0;
+
+    for (final block in blocks) {
+      if (linesUsed >= _maxPreviewLines) break;
+
+      switch (block) {
+        case ChecklistBodyBlock():
+          children.add(_ChecklistPreviewRow(block: block, textColor: textColor));
+          linesUsed += 1;
+        case TextBodyBlock():
+          final remaining = _maxPreviewLines - linesUsed;
+          children.add(Text(
+            block.text,
+            style: TextStyle(fontSize: 13, color: textColor.withAlpha(220)),
+            maxLines: remaining,
+            overflow: TextOverflow.ellipsis,
+          ));
+          linesUsed += block.text.split('\n').length.clamp(0, remaining);
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: children,
+    );
+  }
+}
+
+class _ChecklistPreviewRow extends StatelessWidget {
+  final ChecklistBodyBlock block;
+  final Color textColor;
+
+  const _ChecklistPreviewRow({required this.block, required this.textColor});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            block.checked ? Icons.check_box : Icons.check_box_outline_blank,
+            size: 15,
+            color: textColor.withAlpha(180),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              block.text,
+              style: TextStyle(
+                fontSize: 13,
+                color: textColor.withAlpha(block.checked ? 140 : 220),
+                decoration: block.checked ? TextDecoration.lineThrough : null,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -67,11 +67,12 @@ int _columnsInFirstRow(WidgetTester tester) {
 
 void main() {
   // Column counts below are exact consequences of
-  // SliverGridDelegateWithMaxCrossAxisExtent's own formula -
-  // ceil(crossAxisExtent / (maxCrossAxisExtent + crossAxisSpacing)) - given
-  // this grid's maxCrossAxisExtent: 180, crossAxisSpacing: 8, and the
-  // SliverPadding.all(8) around the grid (16px off the raw screen width),
-  // not values chosen to match observed output.
+  // SliverSimpleGridDelegateWithMaxCrossAxisExtent's own formula (used by
+  // the masonry grid) - ceil(crossAxisExtent / (maxCrossAxisExtent +
+  // crossAxisSpacing)) - given this grid's maxCrossAxisExtent: 180,
+  // crossAxisSpacing: 8, and the SliverPadding.all(8) around the grid
+  // (16px off the raw screen width), not values chosen to match observed
+  // output.
 
   testWidgets('a narrow (~360dp) screen lays out 2 columns', (tester) async {
     final notes = List.generate(6, (i) => _note('Note $i'));

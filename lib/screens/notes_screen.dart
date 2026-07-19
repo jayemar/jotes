@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import '../models/note.dart';
 import '../providers/appearance_provider.dart';
 import '../providers/notes_provider.dart';
@@ -679,13 +680,12 @@ class _NoteGrid extends StatelessWidget {
 
     return SliverPadding(
       padding: const EdgeInsets.all(8),
-      sliver: SliverGrid(
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+      sliver: SliverMasonryGrid(
+        gridDelegate: const SliverSimpleGridDelegateWithMaxCrossAxisExtent(
           maxCrossAxisExtent: 180,
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
-          childAspectRatio: 0.85,
         ),
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
         delegate: SliverChildBuilderDelegate(
           (context, i) {
             final note = notes[i];

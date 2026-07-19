@@ -289,21 +289,13 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
           elevation: 0,
           foregroundColor: textColor,
           actions: [
-            if (_reminderAt != null)
-              TextButton.icon(
-                icon: Icon(
-                  _reminderAt!.isAfter(DateTime.now())
-                      ? Icons.alarm
-                      : Icons.alarm_off,
-                  color: textColor,
-                  size: 16,
-                ),
-                label: Text(
-                  DateFormat('MMM d, h:mm a').format(_reminderAt!),
-                  style: TextStyle(color: textColor, fontSize: 12),
-                ),
-                onPressed: _showReminderOptions,
-              ),
+            _ReminderPillButton(
+              reminderAt: _reminderAt,
+              iconColor: textColor,
+              onPressed:
+                  _reminderAt == null ? _pickReminder : _showReminderOptions,
+            ),
+            const SizedBox(width: 8),
           ],
         ),
         body: Column(
@@ -363,17 +355,6 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                     tooltip: 'Add checklist item',
                   ),
                   IconButton(
-                    icon: Icon(Icons.alarm_add_outlined, color: textColor),
-                    onPressed: _pickReminder,
-                    tooltip: 'Set reminder',
-                  ),
-                  if (_reminderAt != null)
-                    IconButton(
-                      icon: Icon(Icons.alarm_off_outlined, color: textColor),
-                      onPressed: _clearReminder,
-                      tooltip: 'Remove reminder',
-                    ),
-                  IconButton(
                     icon: Icon(Icons.ios_share_outlined, color: textColor),
                     onPressed: _exportToMarkdown,
                     tooltip: 'Export as Markdown',
@@ -382,6 +363,54 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Always-present rounded-square icon button in the editor's top app bar,
+/// matching Keep's pin/reminder/archive pill convention - jotes only has
+/// a reminder toggle, so this is the sole pill rather than one of several.
+class _ReminderPillButton extends StatelessWidget {
+  final DateTime? reminderAt;
+  final Color iconColor;
+  final VoidCallback onPressed;
+
+  const _ReminderPillButton({
+    required this.reminderAt,
+    required this.iconColor,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final reminderAt = this.reminderAt;
+    final IconData icon;
+    final String tooltip;
+    if (reminderAt == null) {
+      icon = Icons.add_alert_outlined;
+      tooltip = 'Set reminder';
+    } else if (reminderAt.isAfter(DateTime.now())) {
+      icon = Icons.alarm;
+      tooltip = 'Reminder options';
+    } else {
+      icon = Icons.alarm_off;
+      tooltip = 'Reminder options';
+    }
+
+    return Material(
+      color: iconColor.withAlpha(25),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onPressed,
+        child: Tooltip(
+          message: tooltip,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
         ),
       ),
     );
