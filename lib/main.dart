@@ -6,9 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:home_widget/home_widget.dart';
 import 'providers/appearance_provider.dart';
 import 'providers/theme_provider.dart';
+import 'screens/note_editor_screen.dart';
 import 'screens/notes_screen.dart';
+import 'screens/widget_note_picker_screen.dart';
 import 'services/db_service.dart';
 import 'services/notification_service.dart';
 import 'services/pb_service.dart';
@@ -54,6 +57,25 @@ void main(List<String> args) async {
   runApp(const ProviderScope(child: JotesApp()));
 }
 
+/// Separate entrypoint Android launches instead of [main] when the user is
+/// placing a Single Note widget on their home screen (see
+/// WidgetConfigurationActivity.kt, which points its FlutterActivity at this
+/// function by name rather than the default). Skips all the reminder/push
+/// setup above since this is just a note picker, not the full app.
+@pragma('vm:entry-point')
+Future<void> configureMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final widgetId = await HomeWidget.initiallyLaunchedFromHomeWidgetConfigure();
+  runApp(
+    ProviderScope(
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: WidgetNotePickerScreen(widgetId: widgetId),
+      ),
+    ),
+  );
+}
+
 class JotesApp extends ConsumerStatefulWidget {
   const JotesApp({super.key});
 
@@ -63,6 +85,7 @@ class JotesApp extends ConsumerStatefulWidget {
 
 class _JotesAppState extends ConsumerState<JotesApp> {
   StreamSubscription<String>? _tapSubscription;
+  StreamSubscription<Uri?>? _widgetClickSubscription;
 
   @override
   void initState() {
@@ -70,15 +93,21 @@ class _JotesAppState extends ConsumerState<JotesApp> {
     _tapSubscription = NotificationService.instance.onNoteTapped.listen(
       _openNoteById,
     );
+    _widgetClickSubscription = HomeWidget.widgetClicked.listen(
+      _openNoteFromWidget,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final launchNoteId = await NotificationService.instance.getLaunchNoteId();
       if (launchNoteId != null) _openNoteById(launchNoteId);
+      final widgetUri = await HomeWidget.initiallyLaunchedFromHomeWidget();
+      if (widgetUri != null) _openNoteFromWidget(widgetUri);
     });
   }
 
   @override
   void dispose() {
     _tapSubscription?.cancel();
+    _widgetClickSubscription?.cancel();
     super.dispose();
   }
 
@@ -92,6 +121,23 @@ class _JotesAppState extends ConsumerState<JotesApp> {
     // lint, same reasoning as the ignores elsewhere in this codebase.
     // ignore: use_build_context_synchronously
     await showReminderPopup(context, ref, note);
+  }
+
+  /// A tap on either home-screen widget carries a `jotes://note/{id}` URI
+  /// (see HomeWidgetIntent.kt on the Kotlin side). Unlike a fired reminder
+  /// notification (_openNoteById, which shows the snooze/dismiss popup), a
+  /// widget tap just means "I want to look at this note" - so this goes
+  /// straight to the editor instead.
+  Future<void> _openNoteFromWidget(Uri? uri) async {
+    if (uri == null || uri.pathSegments.length < 2) return;
+    if (uri.pathSegments[0] != 'note') return;
+    final note = await DbService.instance.getById(uri.pathSegments[1]);
+    if (note == null) return; // note may have since been deleted
+    final navState = navigatorKey.currentState;
+    if (navState == null) return;
+    navState.push(
+      MaterialPageRoute(builder: (_) => NoteEditorScreen(existing: note)),
+    );
   }
 
   @override

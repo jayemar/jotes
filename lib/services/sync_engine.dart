@@ -1,6 +1,7 @@
 import 'db_service.dart';
 import 'notification_service.dart';
 import 'pb_service.dart';
+import 'widget_service.dart';
 
 /// One-time reconciliation between local and remote storage: newer-wins by
 /// `updated` timestamp in either direction, and anything local-only gets
@@ -42,4 +43,11 @@ Future<void> mergeSync() async {
   } catch (_) {
     // Notes are already saved; a failed reminder reschedule is not fatal.
   }
+
+  // This is the one path that changes note data with no Riverpod
+  // ProviderContainer available at all (see the class doc above) - a
+  // headless push-driven merge would otherwise leave home-screen widgets
+  // showing stale data until the app is next foregrounded. NotesNotifier
+  // .build() covers every other path (see notes_provider.dart).
+  await WidgetService.instance.syncAll(await DbService.instance.getAll());
 }

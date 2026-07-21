@@ -1,5 +1,9 @@
 plugins {
     id("com.android.application")
+    // Required for the home-screen widgets (SingleNoteWidget/ReminderListWidget),
+    // which are built with Jetpack Glance's Compose-based DSL - version must
+    // match the Kotlin version pinned in settings.gradle.kts.
+    id("org.jetbrains.kotlin.plugin.compose") version "2.3.20"
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -37,6 +41,10 @@ android {
             )
         }
     }
+
+    buildFeatures {
+        compose = true
+    }
 }
 
 kotlin {
@@ -51,4 +59,6 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // For the home-screen widgets - see the plugins block above.
+    implementation("androidx.glance:glance-appwidget:1.1.1")
 }

@@ -1,13 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/note.dart';
 import '../services/db_service.dart';
 import '../services/notification_service.dart';
 import '../services/pb_service.dart';
+import '../services/widget_service.dart';
 
 class NotesNotifier extends AsyncNotifier<List<Note>> {
   @override
   Future<List<Note>> build() async {
-    return DbService.instance.getAll();
+    final notes = await DbService.instance.getAll();
+    // Every local mutation and the realtime sync subscription both end in
+    // an invalidation that reruns this build(), so this single call keeps
+    // home-screen widgets current for both without touching either of
+    // those call sites individually. Fire-and-forget: widget sync must
+    // never delay the note list itself from loading.
+    unawaited(WidgetService.instance.syncAll(notes));
+    return notes;
   }
 
   /// Saves [note] and (re)schedules its reminder notification if it has

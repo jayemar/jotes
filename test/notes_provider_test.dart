@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/services/db_service.dart';
+import 'package:jotes/services/widget_service.dart';
 import 'package:sembast/sembast_memory.dart';
 import 'package:uuid/uuid.dart';
 
@@ -30,6 +31,11 @@ Note _newNote({
 void main() {
   setUpAll(() {
     DbService.instance.debugFactory = databaseFactoryMemory;
+    // build() pushes widget data on every rebuild - there's no Flutter
+    // test binding in this file (no pumpWidget), so the real home_widget
+    // MethodChannel call would throw "Binding has not yet been
+    // initialized" rather than the plugin's own MissingPluginException.
+    WidgetService.instance.debugSyncAll = (_) async {};
   });
 
   // DbService is a process-wide singleton with a cached connection, so wipe
