@@ -54,6 +54,12 @@ void main(List<String> args) async {
   }
 
   await NotificationService.instance.initialize();
+  // Once per genuine app launch, not from the headless push path above (no
+  // reason to re-alert the user from a background pocket-buzz wake) and not
+  // from sync's own reconnect/push-driven mergeSync (which would otherwise
+  // re-alert on every one of those for a reminder the user simply hasn't
+  // gotten to yet) - see restoreUnresolvedReminders' own doc comment.
+  unawaited(NotificationService.instance.restoreUnresolvedReminders());
   runApp(const ProviderScope(child: JotesApp()));
 }
 
@@ -133,6 +139,16 @@ class _JotesAppState extends ConsumerState<JotesApp> {
     if (uri.pathSegments[0] != 'note') return;
     final note = await DbService.instance.getById(uri.pathSegments[1]);
     if (note == null) return; // note may have since been deleted
+    // Viewing the note this way resolves its reminder the same way "Open
+    // note" in the popup does - see showReminderPopup's own Open note
+    // handler for the same reasoning.
+    try {
+      await NotificationService.instance.cancel(note.notificationId);
+    } catch (_) {
+      // Not fatal - see addOrUpdate in notes_provider.dart for the same
+      // reasoning.
+    }
+    await NotificationService.instance.markReminderResolved(note.id);
     final navState = navigatorKey.currentState;
     if (navState == null) return;
     navState.push(

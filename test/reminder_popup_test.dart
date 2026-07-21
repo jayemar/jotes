@@ -5,6 +5,7 @@ import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/services/notification_service.dart';
 import 'package:jotes/widgets/reminder_popup.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Note _note() {
   final now = DateTime.now();
@@ -47,9 +48,7 @@ Future<_Harness> _pumpHost(
   late WidgetRef capturedRef;
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [
-        if (notifier != null) notesProvider.overrideWith(notifier),
-      ],
+      overrides: [if (notifier != null) notesProvider.overrideWith(notifier)],
       child: MaterialApp(
         home: Consumer(
           builder: (context, ref, child) {
@@ -70,6 +69,10 @@ void main() {
   setUp(() {
     canceledIds.clear();
     NotificationService.instance.debugOnCancel = canceledIds.add;
+    // markReminderResolved (Dismiss/Snooze/Open note) touches
+    // SharedPreferences - unmocked, the plugin has no platform
+    // implementation registered in this test environment.
+    SharedPreferences.setMockInitialValues({});
   });
 
   tearDown(() {
@@ -88,8 +91,9 @@ void main() {
     expect(find.byIcon(Icons.alarm), findsOneWidget);
   });
 
-  testWidgets('falls back to "Reminder" as the title when the note has none',
-      (tester) async {
+  testWidgets('falls back to "Reminder" as the title when the note has none', (
+    tester,
+  ) async {
     final host = await _pumpHost(tester);
     final note = _note().copyWith(title: '');
 
@@ -112,57 +116,77 @@ void main() {
   });
 
   testWidgets(
-      'Dismiss closes the popup, does not open the note, and cancels the '
-      'tray notification', (tester) async {
-    final host = await _pumpHost(tester);
-    final note = _note();
+    'Dismiss closes the popup, does not open the note, and cancels the '
+    'tray notification',
+    (tester) async {
+      final host = await _pumpHost(tester);
+      final note = _note();
 
-    showReminderPopup(host.context, host.ref, note);
-    await tester.pumpAndSettle();
+      showReminderPopup(host.context, host.ref, note);
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('reminder_popup_dismiss')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reminder_popup_dismiss')));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Take out the trash'), findsNothing);
-    expect(find.byKey(const Key('title_field')), findsNothing);
-    expect(canceledIds, contains(note.notificationId));
-  });
-
-  testWidgets(
-      'Ignore closes the popup but leaves the tray notification alone',
-      (tester) async {
-    final host = await _pumpHost(tester);
-    final note = _note();
-
-    showReminderPopup(host.context, host.ref, note);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('reminder_popup_ignore')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Take out the trash'), findsNothing);
-    expect(find.byKey(const Key('title_field')), findsNothing);
-    expect(canceledIds, isEmpty);
-  });
-
-  testWidgets('Open note closes the popup and navigates to the editor',
-      (tester) async {
-    final host = await _pumpHost(tester);
-
-    showReminderPopup(host.context, host.ref, _note());
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Open note'));
-    await tester.pumpAndSettle();
-
-    // The popup itself is gone, and the note editor (identified by its
-    // title field) is now showing with the same note's title loaded.
-    expect(find.byKey(const Key('title_field')), findsOneWidget);
-    expect(find.text('Take out the trash'), findsOneWidget);
-  });
+      expect(find.text('Take out the trash'), findsNothing);
+      expect(find.byKey(const Key('title_field')), findsNothing);
+      expect(canceledIds, contains(note.notificationId));
+      expect(
+        await NotificationService.instance.debugIsReminderResolved(note.id),
+        isTrue,
+      );
+    },
+  );
 
   testWidgets(
-      'Snooze cancels the tray notification, then picking a new time '
+    'Ignore closes the popup but leaves the tray notification alone, and '
+    'does not mark the reminder resolved',
+    (tester) async {
+      final host = await _pumpHost(tester);
+      final note = _note();
+
+      showReminderPopup(host.context, host.ref, note);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('reminder_popup_ignore')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Take out the trash'), findsNothing);
+      expect(find.byKey(const Key('title_field')), findsNothing);
+      expect(canceledIds, isEmpty);
+      expect(
+        await NotificationService.instance.debugIsReminderResolved(note.id),
+        isFalse,
+      );
+    },
+  );
+
+  testWidgets(
+    'Open note closes the popup, navigates to the editor, cancels the '
+    'tray notification, and marks the reminder resolved',
+    (tester) async {
+      final host = await _pumpHost(tester);
+      final note = _note();
+
+      showReminderPopup(host.context, host.ref, note);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Open note'));
+      await tester.pumpAndSettle();
+
+      // The popup itself is gone, and the note editor (identified by its
+      // title field) is now showing with the same note's title loaded.
+      expect(find.byKey(const Key('title_field')), findsOneWidget);
+      expect(find.text('Take out the trash'), findsOneWidget);
+      expect(canceledIds, contains(note.notificationId));
+      expect(
+        await NotificationService.instance.debugIsReminderResolved(note.id),
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets('Snooze cancels the tray notification, then picking a new time '
       'saves the note with the updated reminder', (tester) async {
     final recorder = _RecordingNotesNotifier();
     final host = await _pumpHost(tester, notifier: () => recorder);
@@ -177,6 +201,10 @@ void main() {
     // The popup itself closed immediately, before any picker interaction.
     expect(find.text('Take out the trash'), findsNothing);
     expect(canceledIds, contains(note.notificationId));
+    expect(
+      await NotificationService.instance.debugIsReminderResolved(note.id),
+      isTrue,
+    );
 
     // Confirm the date picker, then the time picker, each with their
     // pre-filled initial value (same flow as note_editor_screen_test.dart).

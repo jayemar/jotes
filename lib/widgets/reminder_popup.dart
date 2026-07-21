@@ -11,11 +11,7 @@ import '../services/notification_service.dart';
 /// which the plugin treats identically to a tap. A tray notification alone
 /// is easy to miss or dismiss without reading; this is the "as well as"
 /// the user asked for, not a replacement for it.
-Future<void> showReminderPopup(
-  BuildContext context,
-  WidgetRef ref,
-  Note note,
-) {
+Future<void> showReminderPopup(BuildContext context, WidgetRef ref, Note note) {
   return showDialog<void>(
     context: context,
     builder: (dialogContext) => AlertDialog(
@@ -27,19 +23,27 @@ Future<void> showReminderPopup(
       ),
       content: note.body.isEmpty
           ? null
-          : Text(
-              note.body,
-              maxLines: 6,
-              overflow: TextOverflow.ellipsis,
-            ),
+          : Text(note.body, maxLines: 6, overflow: TextOverflow.ellipsis),
       actionsAlignment: MainAxisAlignment.center,
       actions: [
         Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             FilledButton(
-              onPressed: () {
+              onPressed: () async {
                 Navigator.pop(dialogContext);
+                // Not fatal - see addOrUpdate in notes_provider.dart for
+                // the same reasoning; opening the note must still work
+                // even if the tray notification fails to cancel.
+                try {
+                  await NotificationService.instance.cancel(
+                    note.notificationId,
+                  );
+                } catch (_) {}
+                await NotificationService.instance.markReminderResolved(
+                  note.id,
+                );
+                if (!context.mounted) return;
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -66,9 +70,13 @@ Future<void> showReminderPopup(
                 // the same reasoning; the popup must still close even if
                 // the tray notification fails to cancel.
                 try {
-                  await NotificationService.instance
-                      .cancel(note.notificationId);
+                  await NotificationService.instance.cancel(
+                    note.notificationId,
+                  );
                 } catch (_) {}
+                await NotificationService.instance.markReminderResolved(
+                  note.id,
+                );
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
               },
               child: const Text('Dismiss'),
@@ -98,6 +106,13 @@ Future<void> _snooze(BuildContext context, WidgetRef ref, Note note) async {
     // Not fatal - see addOrUpdate in notes_provider.dart for the same
     // reasoning.
   }
+  // Marked resolved as soon as the old notification is cancelled, not only
+  // once a new time is actually picked below - if the user backs out of
+  // the pickers without choosing one, the old cycle is still done and
+  // shouldn't reappear on a later restart. (If they do pick a new time,
+  // schedule() clears this again for the fresh cycle - see its own
+  // comment.)
+  await NotificationService.instance.markReminderResolved(note.id);
 
   if (!context.mounted) return;
   final now = DateTime.now();
@@ -118,9 +133,16 @@ Future<void> _snooze(BuildContext context, WidgetRef ref, Note note) async {
   );
   if (time == null) return;
 
-  final newReminderAt =
-      DateTime(date.year, date.month, date.day, time.hour, time.minute);
-  await ref.read(notesProvider.notifier).addOrUpdate(
+  final newReminderAt = DateTime(
+    date.year,
+    date.month,
+    date.day,
+    time.hour,
+    time.minute,
+  );
+  await ref
+      .read(notesProvider.notifier)
+      .addOrUpdate(
         note.copyWith(reminderAt: newReminderAt, updated: DateTime.now()),
       );
 }

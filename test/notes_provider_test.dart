@@ -4,6 +4,7 @@ import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/services/db_service.dart';
 import 'package:jotes/services/widget_service.dart';
+import 'package:jotes/widgets/note_body_editor.dart';
 import 'package:sembast/sembast_memory.dart';
 import 'package:uuid/uuid.dart';
 
@@ -58,18 +59,20 @@ void main() {
       expect(all.single.title, 'Groceries');
     });
 
-    test('upsert with an existing id replaces the row instead of adding one',
-        () async {
-      final original = _newNote(id: 'db-update', title: 'Original');
-      await DbService.instance.upsert(original);
+    test(
+      'upsert with an existing id replaces the row instead of adding one',
+      () async {
+        final original = _newNote(id: 'db-update', title: 'Original');
+        await DbService.instance.upsert(original);
 
-      final updated = original.copyWith(title: 'Updated');
-      await DbService.instance.upsert(updated);
+        final updated = original.copyWith(title: 'Updated');
+        await DbService.instance.upsert(updated);
 
-      final all = await DbService.instance.getAll();
-      expect(all, hasLength(1));
-      expect(all.single.title, 'Updated');
-    });
+        final all = await DbService.instance.getAll();
+        expect(all, hasLength(1));
+        expect(all.single.title, 'Updated');
+      },
+    );
 
     test('delete removes the row', () async {
       final note = _newNote(id: 'db-delete');
@@ -99,14 +102,18 @@ void main() {
 
     test('withOverdueReminders includes only notes whose reminder time has '
         'already passed', () async {
-      await DbService.instance.upsert(_newNote(
-        id: 'overdue',
-        reminderAt: DateTime.now().subtract(const Duration(minutes: 5)),
-      ));
-      await DbService.instance.upsert(_newNote(
-        id: 'future',
-        reminderAt: DateTime.now().add(const Duration(minutes: 5)),
-      ));
+      await DbService.instance.upsert(
+        _newNote(
+          id: 'overdue',
+          reminderAt: DateTime.now().subtract(const Duration(minutes: 5)),
+        ),
+      );
+      await DbService.instance.upsert(
+        _newNote(
+          id: 'future',
+          reminderAt: DateTime.now().add(const Duration(minutes: 5)),
+        ),
+      );
       await DbService.instance.upsert(_newNote(id: 'no-reminder'));
 
       final overdue = await DbService.instance.withOverdueReminders();
@@ -114,6 +121,37 @@ void main() {
       expect(overdue.map((n) => n.id), contains('overdue'));
       expect(overdue.map((n) => n.id), isNot(contains('future')));
       expect(overdue.map((n) => n.id), isNot(contains('no-reminder')));
+    });
+
+    test('a body with interleaved text and checklist sections (text, 2 '
+        'checkboxes, text, 3 checkboxes, text) round-trips through storage '
+        'unchanged', () async {
+      const body =
+          'Opening notes here.\n'
+          '- [ ] First task\n'
+          '- [x] Second task\n'
+          'Some notes in the middle.\n'
+          '- [ ] Third task\n'
+          '- [ ] Fourth task\n'
+          '- [x] Fifth task\n'
+          'Closing notes here.';
+      final note = _newNote(id: 'mixed-body-sections', body: body);
+
+      await DbService.instance.upsert(note);
+      addTearDown(() => DbService.instance.delete(note.id));
+
+      final fetched = await DbService.instance.getById(note.id);
+      expect(fetched, isNotNull);
+      expect(fetched!.body, body);
+
+      // Confirms the stored string still parses into the intended shape,
+      // not just that the raw bytes happened to survive storage.
+      final blocks = parseBody(fetched.body);
+      expect(blocks.whereType<ChecklistBodyBlock>(), hasLength(5));
+      expect(blocks.whereType<TextBodyBlock>(), hasLength(3));
+
+      await DbService.instance.delete(note.id);
+      expect(await DbService.instance.getById(note.id), isNull);
     });
   });
 
@@ -129,69 +167,74 @@ void main() {
       expect(state.map((n) => n.id), contains('p-create'));
     });
 
-    test('addOrUpdate with the same id updates in place, no duplicate',
-        () async {
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
+    test(
+      'addOrUpdate with the same id updates in place, no duplicate',
+      () async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
 
-      final note = _newNote(id: 'p-update', title: 'Before');
-      await container.read(notesProvider.notifier).addOrUpdate(note);
-      await container
-          .read(notesProvider.notifier)
-          .addOrUpdate(note.copyWith(title: 'After'));
+        final note = _newNote(id: 'p-update', title: 'Before');
+        await container.read(notesProvider.notifier).addOrUpdate(note);
+        await container
+            .read(notesProvider.notifier)
+            .addOrUpdate(note.copyWith(title: 'After'));
 
-      final state = await container.read(notesProvider.future);
-      final matches = state.where((n) => n.id == 'p-update');
-      expect(matches, hasLength(1));
-      expect(matches.single.title, 'After');
-    });
-
-    test('delete removes the note from provider state and from storage',
-        () async {
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
-
-      final note = _newNote(id: 'p-delete');
-      await container.read(notesProvider.notifier).addOrUpdate(note);
-      expect(
-        (await container.read(notesProvider.future)).map((n) => n.id),
-        contains('p-delete'),
-      );
-
-      await container.read(notesProvider.notifier).delete(note);
-
-      final state = await container.read(notesProvider.future);
-      expect(state.map((n) => n.id), isNot(contains('p-delete')));
-
-      // Assert against storage directly too, not just in-memory provider
-      // state, so a delete that updates the UI but silently fails to
-      // persist would still be caught.
-      final persisted = await DbService.instance.getAll();
-      expect(persisted.map((n) => n.id), isNot(contains('p-delete')));
-    });
-
-    test('addOrUpdate with a reminder does not prevent a later delete',
-        () async {
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
-
-      final note = _newNote(
-        id: 'p-delete-with-reminder',
-        reminderAt: DateTime.now().add(const Duration(hours: 1)),
-      );
-      await container.read(notesProvider.notifier).addOrUpdate(note);
-
-      await container.read(notesProvider.notifier).delete(note);
-
-      final persisted = await DbService.instance.getAll();
-      expect(
-        persisted.map((n) => n.id),
-        isNot(contains('p-delete-with-reminder')),
-      );
-    });
+        final state = await container.read(notesProvider.future);
+        final matches = state.where((n) => n.id == 'p-update');
+        expect(matches, hasLength(1));
+        expect(matches.single.title, 'After');
+      },
+    );
 
     test(
-        'addOrUpdate returns the real scheduling error instead of silently '
+      'delete removes the note from provider state and from storage',
+      () async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        final note = _newNote(id: 'p-delete');
+        await container.read(notesProvider.notifier).addOrUpdate(note);
+        expect(
+          (await container.read(notesProvider.future)).map((n) => n.id),
+          contains('p-delete'),
+        );
+
+        await container.read(notesProvider.notifier).delete(note);
+
+        final state = await container.read(notesProvider.future);
+        expect(state.map((n) => n.id), isNot(contains('p-delete')));
+
+        // Assert against storage directly too, not just in-memory provider
+        // state, so a delete that updates the UI but silently fails to
+        // persist would still be caught.
+        final persisted = await DbService.instance.getAll();
+        expect(persisted.map((n) => n.id), isNot(contains('p-delete')));
+      },
+    );
+
+    test(
+      'addOrUpdate with a reminder does not prevent a later delete',
+      () async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        final note = _newNote(
+          id: 'p-delete-with-reminder',
+          reminderAt: DateTime.now().add(const Duration(hours: 1)),
+        );
+        await container.read(notesProvider.notifier).addOrUpdate(note);
+
+        await container.read(notesProvider.notifier).delete(note);
+
+        final persisted = await DbService.instance.getAll();
+        expect(
+          persisted.map((n) => n.id),
+          isNot(contains('p-delete-with-reminder')),
+        );
+      },
+    );
+
+    test('addOrUpdate returns the real scheduling error instead of silently '
         'swallowing it, while still saving the note - there is no '
         'registered notification platform in this test environment, so '
         'the real schedule() call genuinely throws here, exactly the class '
@@ -203,8 +246,9 @@ void main() {
         id: 'p-schedule-error',
         reminderAt: DateTime.now().add(const Duration(hours: 1)),
       );
-      final error =
-          await container.read(notesProvider.notifier).addOrUpdate(note);
+      final error = await container
+          .read(notesProvider.notifier)
+          .addOrUpdate(note);
 
       expect(error, isNotNull);
 
@@ -212,8 +256,7 @@ void main() {
       expect(persisted, isNotNull);
     });
 
-    test(
-        'addOrUpdate with no reminder returns no error, even though '
+    test('addOrUpdate with no reminder returns no error, even though '
         'cancelling a stale notification also throws in this test '
         'environment - a cancel failure must not be mistaken for a '
         'schedule failure', () async {
@@ -221,8 +264,9 @@ void main() {
       addTearDown(container.dispose);
 
       final note = _newNote(id: 'p-no-reminder');
-      final error =
-          await container.read(notesProvider.notifier).addOrUpdate(note);
+      final error = await container
+          .read(notesProvider.notifier)
+          .addOrUpdate(note);
 
       expect(error, isNull);
     });
