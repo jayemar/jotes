@@ -33,11 +33,16 @@ val noteTextColorProvider: GlanceColorProvider =
     ColorProvider(day = Color(0xFF202124), night = Color(0xFFE8EAED))
 
 // Reminder List widget: neutral background matching the app's own
-// scaffold background roughly, plus red/green row-time colors mirroring
-// NoteCard's _ReminderChip convention (note_card.dart).
+// scaffold background roughly, plus amber/green row-time colors mirroring
+// NoteCard's _ReminderChip convention (note_card.dart). Only two states
+// show up here, not three - buildReminderListPayload (widget_service.dart)
+// already excludes a resolved-and-overdue reminder from this list
+// entirely, so "overdue" here only ever means "triggered but not yet
+// acted upon" (amber), never "complete" (that state has no red counterpart
+// in this widget).
 val widgetBackgroundProvider: GlanceColorProvider =
     ColorProvider(day = Color(0xFFF8F9FA), night = Color(0xFF202124))
 val overdueColorProvider: GlanceColorProvider =
-    ColorProvider(day = Color(0xFFD93025), night = Color(0xFFF28B82))
+    ColorProvider(day = Color(0xFFF9AB00), night = Color(0xFFFDD663))
 val upcomingColorProvider: GlanceColorProvider =
     ColorProvider(day = Color(0xFF188038), night = Color(0xFF81C995))

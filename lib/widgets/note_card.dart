@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/note.dart';
+import '../services/notification_service.dart';
 import 'note_body_editor.dart'
     show ChecklistBodyBlock, TextBodyBlock, checklistIndentStepPx, parseBody;
 
@@ -66,6 +67,7 @@ class NoteCard extends StatelessWidget {
                 if (note.reminderAt != null) ...[
                   const SizedBox(height: 8),
                   _ReminderChip(
+                    noteId: note.id,
                     reminderAt: note.reminderAt!,
                     textColor: textColor,
                   ),
@@ -185,29 +187,57 @@ class _ChecklistPreviewRow extends StatelessWidget {
   }
 }
 
+/// Three states, not two: green while [reminderAt] is still in the future
+/// (untriggered); amber once it's passed but nothing's been done about it
+/// yet (Dismiss/Snooze - see NotificationService.isReminderResolved); red
+/// once the user has acted on it (complete). A future reminder is always
+/// green without needing the resolved check at all - schedule() already
+/// clears any stale resolved flag when a note's next cycle begins, so
+/// "still in the future" and "resolved" never meaningfully coexist.
 class _ReminderChip extends StatelessWidget {
+  final String noteId;
   final DateTime reminderAt;
   final Color textColor;
 
-  const _ReminderChip({required this.reminderAt, required this.textColor});
+  const _ReminderChip({
+    required this.noteId,
+    required this.reminderAt,
+    required this.textColor,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isPast = reminderAt.isBefore(DateTime.now());
+    if (!isPast) {
+      return _chip(color: Colors.green, icon: Icons.alarm);
+    }
+
+    return FutureBuilder<bool>(
+      future: NotificationService.instance.isReminderResolved(noteId),
+      builder: (context, snapshot) {
+        // Defaults to "not yet resolved" while the check is still pending -
+        // safer to briefly under-claim completion than to flash red before
+        // the real answer comes back.
+        final resolved = snapshot.data ?? false;
+        return _chip(
+          color: resolved ? Colors.red : Colors.amber,
+          icon: Icons.alarm_off,
+        );
+      },
+    );
+  }
+
+  Widget _chip({required Color color, required IconData icon}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: isPast ? Colors.red.withAlpha(40) : Colors.green.withAlpha(40),
+        color: color.withAlpha(40),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            isPast ? Icons.alarm_off : Icons.alarm,
-            size: 12,
-            color: textColor,
-          ),
+          Icon(icon, size: 12, color: textColor),
           const SizedBox(width: 4),
           Text(
             DateFormat('MMM d, h:mm a').format(reminderAt),
