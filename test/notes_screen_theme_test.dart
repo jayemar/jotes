@@ -5,6 +5,7 @@ import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/notes_screen.dart';
 import 'package:jotes/screens/settings_screen.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeNotesNotifier extends NotesNotifier {
@@ -29,6 +30,13 @@ Future<void> _pumpNotesScreen(WidgetTester tester) async {
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    PackageInfo.setMockInitialValues(
+      appName: 'jotes',
+      packageName: 'com.jayemar.jotes',
+      version: '1.1.0',
+      buildNumber: '9',
+      buildSignature: '',
+    );
   });
 
   testWidgets('the drawer shows a J beside the jotes header', (tester) async {
@@ -42,18 +50,34 @@ void main() {
   });
 
   testWidgets(
-      'tapping Settings in the drawer navigates to the Settings screen',
-      (tester) async {
-    await _pumpNotesScreen(tester);
+    'the semantic version sits beside "jotes" in the header - no build '
+    'number or build timestamp shown anywhere in the drawer',
+    (tester) async {
+      await _pumpNotesScreen(tester);
 
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('settings_drawer_item')), findsOneWidget);
+      expect(find.text('v1.1.0'), findsOneWidget);
+      expect(find.textContaining('(9)'), findsNothing);
+      expect(find.textContaining('UTC'), findsNothing);
+    },
+  );
 
-    await tester.tap(find.byKey(const Key('settings_drawer_item')));
-    await tester.pumpAndSettle();
+  testWidgets(
+    'tapping Settings in the drawer navigates to the Settings screen',
+    (tester) async {
+      await _pumpNotesScreen(tester);
 
-    expect(find.byType(SettingsScreen), findsOneWidget);
-  });
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('settings_drawer_item')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('settings_drawer_item')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SettingsScreen), findsOneWidget);
+    },
+  );
 }

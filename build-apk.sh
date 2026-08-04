@@ -35,10 +35,8 @@ if [ "$BUILD_TYPE" = "release" ]; then
     BUILD_NUMBER="$NEW_BUILD_NUMBER"
 fi
 
-BUILD_TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
-
 echo "Building ${BUILD_TYPE} APK (version ${APP_VERSION}+${BUILD_NUMBER})..."
-flutter build apk "--${BUILD_TYPE}" --dart-define="BUILD_TIMESTAMP=${BUILD_TIMESTAMP}"
+flutter build apk "--${BUILD_TYPE}"
 
 APK_PATH="build/app/outputs/flutter-apk/app-${BUILD_TYPE}.apk"
 echo "APK: ${PROJECT_DIR}/${APK_PATH} ($(du -h "$APK_PATH" | cut -f1))"

@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../build_info.dart';
 import '../models/note.dart';
 import '../providers/app_info_provider.dart';
 import '../providers/notes_provider.dart';
@@ -410,11 +409,20 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     final itemStyle = AppTextStyles.of(context).item;
     final syncState = ref.watch(syncProvider);
+    final packageInfoAsync = ref.watch(packageInfoProvider);
+    // Semantic version only - no build number/timestamp, which were only
+    // ever useful for confirming which build is installed, not something
+    // an end user needs to see on every drawer open.
+    final versionText = packageInfoAsync.when(
+      data: (info) => 'v${info.version}',
+      loading: () => '',
+      error: (_, _) => '',
+    );
 
     return Drawer(
       child: SafeArea(
-        // `minimum` guarantees breathing room below the pinned Sync/version
-        // footer even on devices where the system nav bar's reported inset
+        // `minimum` guarantees breathing room below the pinned Sync row
+        // even on devices where the system nav bar's reported inset
         // doesn't fully cover its own visual footprint (seen on a tablet
         // with an on-screen nav bar overlapping the drawer's last row).
         minimum: const EdgeInsets.only(bottom: 12),
@@ -427,6 +435,8 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
                       children: [
                         Text(
                           'J',
@@ -443,6 +453,16 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                             fontSize: 24,
                             fontWeight: FontWeight.w400,
                             color: onSurface,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          versionText,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ],
@@ -517,32 +537,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                 );
               },
             ),
-            _drawerVersionFooter(context),
           ],
-        ),
-      ),
-    );
-  }
-
-  /// A section grouping's own name ("Appearance", "Data") - the most
-  /// Version + build timestamp, pinned under the Sync row at the very
-  /// bottom of the drawer - useful for confirming which build is actually
-  /// installed on a given device, separate from the app's own settings.
-  Widget _drawerVersionFooter(BuildContext context) {
-    final packageInfoAsync = ref.watch(packageInfoProvider);
-    final versionText = packageInfoAsync.when(
-      data: (info) => 'v${info.version} (${info.buildNumber})',
-      loading: () => '',
-      error: (_, _) => '',
-    );
-    final parts = [versionText, buildTimestamp].where((s) => s.isNotEmpty);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-      child: Text(
-        parts.join(' · '),
-        style: TextStyle(
-          fontSize: 11,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
