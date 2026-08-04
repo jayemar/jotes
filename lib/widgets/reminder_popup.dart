@@ -5,12 +5,10 @@ import '../providers/notes_provider.dart';
 import '../screens/note_editor_screen.dart';
 import '../services/notification_service.dart';
 
-/// Shown whenever a reminder actually fires and is opened - either by
-/// tapping its tray notification, or via the full-screen takeover (see
-/// AndroidNotificationDetails.fullScreenIntent in notification_service.dart),
-/// which the plugin treats identically to a tap. A tray notification alone
-/// is easy to miss or dismiss without reading; this is the "as well as"
-/// the user asked for, not a replacement for it.
+/// Shown when a fired reminder's tray notification is tapped (see
+/// onNoteTapped/getLaunchNoteId in main.dart) - not shown automatically the
+/// moment a reminder fires; see AndroidNotificationDetails.fullScreenIntent
+/// in notification_service.dart, deliberately false, for why.
 Future<void> showReminderPopup(BuildContext context, WidgetRef ref, Note note) {
   return showDialog<void>(
     context: context,

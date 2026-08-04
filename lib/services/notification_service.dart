@@ -56,12 +56,16 @@ NotificationDetails _reminderNotificationDetails(Note note) {
       priority: Priority.high,
       styleInformation: BigTextStyleInformation(note.body),
       category: AndroidNotificationCategory.alarm,
-      // Takes over the screen (even locked/app closed) the same way a
-      // real alarm clock does, rather than only ever showing a tray
-      // notification that's easy to miss. The plugin then treats this
-      // exactly like a normal notification tap - see onNoteTapped/
-      // getLaunchNoteId in main.dart, which already handle that.
-      fullScreenIntent: true,
+      // Deliberately false (the default) - a reminder should behave like
+      // an ordinary high-importance notification (heads-up while
+      // unlocked, sound/vibration plus whatever ambient/lock-screen peek
+      // the device itself offers), not take over the screen and launch
+      // the app on its own. fullScreenIntent: true used to be set here for
+      // exactly that alarm-clock-style takeover; this reverses that on
+      // explicit request. Tapping the notification still opens the
+      // reminder popup as before (see onNoteTapped/getLaunchNoteId in
+      // main.dart) - only the automatic, un-tapped takeover is gone.
+      fullScreenIntent: false,
       // Without this, merely tapping the notification to view it (which
       // the plugin treats as the same thing as opening it) auto-cancels it
       // before the user picks anything in the popup - silently breaking
