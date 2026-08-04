@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:home_widget/home_widget.dart';
 import '../models/note.dart';
+import '../widgets/note_body_editor.dart'
+    show BodyBlock, ChecklistBodyBlock, TextBodyBlock, parseBody;
+import 'notification_service.dart';
 
 const _singleNoteReceiver = 'com.jayemar.jotes.SingleNoteWidgetReceiver';
 const _reminderListReceiver = 'com.jayemar.jotes.ReminderListWidgetReceiver';
@@ -50,7 +53,7 @@ class WidgetService {
   }
 
   Future<void> _syncReminderList(List<Note> notes) async {
-    final payload = buildReminderListPayload(notes);
+    final payload = await buildReminderListPayload(notes);
     await HomeWidget.saveWidgetData<String>(
       _remindersDataKey,
       jsonEncode(payload),
@@ -91,29 +94,44 @@ class WidgetService {
     }
   }
 
-  /// Every note with a reminder set, sorted oldest-first - an overdue
-  /// reminder that's been sitting the longest sorts above one that just
-  /// fired, and both sort above anything still upcoming, forming a single
-  /// chronological list with no special-casing needed. `isOverdue` mirrors
-  /// NoteCard's own _ReminderChip convention (note_card.dart) so the widget
-  /// can match its red/green styling.
+  /// Every note with a reminder set that the user hasn't resolved yet
+  /// (Dismiss or Snooze - see NotificationService.isReminderResolved),
+  /// sorted oldest-first - an overdue reminder that's been sitting the
+  /// longest sorts above one that just fired, and both sort above anything
+  /// still upcoming, forming a single chronological list with no
+  /// special-casing needed. `isOverdue` mirrors NoteCard's own
+  /// _ReminderChip convention (note_card.dart) so the widget can match its
+  /// red/green styling.
+  ///
+  /// Only overdue notes are checked against resolved state - an upcoming
+  /// reminder hasn't fired yet, so "resolved" doesn't apply to it (and
+  /// schedule() clears any stale resolution when a note's next cycle
+  /// begins anyway - see its own comment), so this always shows it
+  /// regardless.
   @visibleForTesting
-  static List<Map<String, dynamic>> buildReminderListPayload(
+  static Future<List<Map<String, dynamic>>> buildReminderListPayload(
     List<Note> notes, {
     DateTime? now,
-  }) {
+  }) async {
     final effectiveNow = now ?? DateTime.now();
     final withReminders = notes.where((n) => n.reminderAt != null).toList()
       ..sort((a, b) => a.reminderAt!.compareTo(b.reminderAt!));
-    return [
-      for (final note in withReminders)
-        {
-          'id': note.id,
-          'title': note.title,
-          'reminderAtMillis': note.reminderAt!.millisecondsSinceEpoch,
-          'isOverdue': !note.reminderAt!.isAfter(effectiveNow),
-        },
-    ];
+
+    final payload = <Map<String, dynamic>>[];
+    for (final note in withReminders) {
+      final isOverdue = !note.reminderAt!.isAfter(effectiveNow);
+      if (isOverdue &&
+          await NotificationService.instance.isReminderResolved(note.id)) {
+        continue;
+      }
+      payload.add({
+        'id': note.id,
+        'title': note.title,
+        'reminderAtMillis': note.reminderAt!.millisecondsSinceEpoch,
+        'isOverdue': isOverdue,
+      });
+    }
+    return payload;
   }
 
   /// Also called directly from widget_note_picker_screen.dart when a note
@@ -123,8 +141,25 @@ class WidgetService {
       'id': note.id,
       'title': note.title,
       'body': note.body,
+      // Pre-parsed so SingleNoteWidget.kt can render checklist items as
+      // real checkbox glyphs (checked/unchecked, strikethrough), the same
+      // way note_card.dart's own preview does, instead of the raw
+      // "- [ ] "/"- [x] " markdown syntax [body] above still carries -
+      // parsing happens once here rather than duplicating parseBody's
+      // regex in Kotlin.
+      'blocks': parseBody(note.body).map(_blockJson).toList(),
       'colorIndex': note.colorIndex,
       'reminderAtMillis': note.reminderAt?.millisecondsSinceEpoch,
     };
   }
+
+  static Map<String, dynamic> _blockJson(BodyBlock block) => switch (block) {
+    ChecklistBodyBlock() => {
+      'type': 'checklist',
+      'checked': block.checked,
+      'text': block.text,
+      'indent': block.indent,
+    },
+    TextBodyBlock() => {'type': 'text', 'text': block.text},
+  };
 }

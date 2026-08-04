@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/note.dart';
-import 'note_body_editor.dart' show ChecklistBodyBlock, TextBodyBlock, parseBody;
+import 'note_body_editor.dart'
+    show ChecklistBodyBlock, TextBodyBlock, checklistIndentStepPx, parseBody;
 
 class NoteCard extends StatelessWidget {
   final Note note;
@@ -64,7 +65,10 @@ class NoteCard extends StatelessWidget {
                   _NoteBodyPreview(body: note.body, textColor: textColor),
                 if (note.reminderAt != null) ...[
                   const SizedBox(height: 8),
-                  _ReminderChip(reminderAt: note.reminderAt!, textColor: textColor),
+                  _ReminderChip(
+                    reminderAt: note.reminderAt!,
+                    textColor: textColor,
+                  ),
                 ],
               ],
             ),
@@ -110,16 +114,20 @@ class _NoteBodyPreview extends StatelessWidget {
 
       switch (block) {
         case ChecklistBodyBlock():
-          children.add(_ChecklistPreviewRow(block: block, textColor: textColor));
+          children.add(
+            _ChecklistPreviewRow(block: block, textColor: textColor),
+          );
           linesUsed += 1;
         case TextBodyBlock():
           final remaining = _maxPreviewLines - linesUsed;
-          children.add(Text(
-            block.text,
-            style: TextStyle(fontSize: 13, color: textColor.withAlpha(220)),
-            maxLines: remaining,
-            overflow: TextOverflow.ellipsis,
-          ));
+          children.add(
+            Text(
+              block.text,
+              style: TextStyle(fontSize: 13, color: textColor.withAlpha(220)),
+              maxLines: remaining,
+              overflow: TextOverflow.ellipsis,
+            ),
+          );
           linesUsed += block.text.split('\n').length.clamp(0, remaining);
       }
     }
@@ -141,9 +149,17 @@ class _ChecklistPreviewRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
+      padding: EdgeInsets.only(
+        left: block.indent * checklistIndentStepPx,
+        top: 1,
+        bottom: 1,
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        // .center, not .start - see note_body_view.dart's own
+        // _ChecklistViewRow for why top-aligning a checkbox/icon next to
+        // text reliably looks like the checkbox is floating higher than
+        // it should.
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Icon(
             block.checked ? Icons.check_box : Icons.check_box_outline_blank,

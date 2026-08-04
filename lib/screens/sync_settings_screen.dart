@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show AutofillHints, TextInput;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/sync_provider.dart';
 
@@ -6,8 +7,7 @@ class SyncSettingsScreen extends ConsumerStatefulWidget {
   const SyncSettingsScreen({super.key});
 
   @override
-  ConsumerState<SyncSettingsScreen> createState() =>
-      _SyncSettingsScreenState();
+  ConsumerState<SyncSettingsScreen> createState() => _SyncSettingsScreenState();
 }
 
 class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
@@ -15,6 +15,7 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _register = false;
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -30,12 +31,20 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
     final password = _passwordCtrl.text;
     if (url.isEmpty || email.isEmpty || password.isEmpty) return;
 
-    await ref.read(syncProvider.notifier).connect(
+    await ref
+        .read(syncProvider.notifier)
+        .connect(
           url: url,
           email: email,
           password: password,
           register: _register,
         );
+    // Tells the platform autofill service (password managers included)
+    // that this form's submission is done, so it can offer to save a
+    // newly entered credential - without this, a password manager may
+    // only ever offer to *fill* an already-saved entry, never prompt to
+    // save a new one after a successful sign-in/registration.
+    TextInput.finishAutofillContext();
   }
 
   @override
@@ -48,11 +57,10 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
         padding: const EdgeInsets.all(16),
         child: switch (syncState.status) {
           SyncStatus.connected => _buildConnected(syncState),
-          SyncStatus.connecting =>
-            const Center(child: CircularProgressIndicator()),
-          SyncStatus.disconnected ||
-          SyncStatus.error =>
-            _buildForm(syncState),
+          SyncStatus.connecting => const Center(
+            child: CircularProgressIndicator(),
+          ),
+          SyncStatus.disconnected || SyncStatus.error => _buildForm(syncState),
         },
       ),
     );
@@ -101,23 +109,54 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
           controller: _urlCtrl,
           decoration: const InputDecoration(
             labelText: 'Server URL',
-            hintText: 'https://your-server:8090',
+            hintText: 'http://your-server:8090',
           ),
           keyboardType: TextInputType.url,
         ),
         const SizedBox(height: 12),
-        TextField(
-          key: const Key('sync_email_field'),
-          controller: _emailCtrl,
-          decoration: const InputDecoration(labelText: 'Email'),
-          keyboardType: TextInputType.emailAddress,
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          key: const Key('sync_password_field'),
-          controller: _passwordCtrl,
-          decoration: const InputDecoration(labelText: 'Password'),
-          obscureText: true,
+        // Email/password grouped so the platform autofill service (and
+        // password managers hooking into it) treats them as one form -
+        // without an AutofillGroup and per-field autofillHints, neither
+        // field is identifiable as a credential at all, which is why a
+        // password manager wouldn't offer to fill or save either one.
+        AutofillGroup(
+          child: Column(
+            children: [
+              TextField(
+                key: const Key('sync_email_field'),
+                controller: _emailCtrl,
+                decoration: const InputDecoration(labelText: 'Email'),
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [
+                  AutofillHints.email,
+                  AutofillHints.username,
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('sync_password_field'),
+                controller: _passwordCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  suffixIcon: IconButton(
+                    key: const Key('sync_password_visibility_toggle'),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                    tooltip: _obscurePassword
+                        ? 'Show password'
+                        : 'Hide password',
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
+                obscureText: _obscurePassword,
+                autofillHints: const [AutofillHints.password],
+              ),
+            ],
+          ),
         ),
         SwitchListTile(
           key: const Key('sync_register_switch'),

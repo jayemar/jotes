@@ -20,8 +20,10 @@ class MarkdownImportResult {
 ///
 /// One file becomes one note, the inverse of MarkdownExportService: a
 /// leading "# Heading" line becomes the title (matching what export
-/// produces), with everything else becoming the body untouched - note
-/// bodies already use GitHub-Flavored-Markdown checklist syntax (see
+/// produces), an optional "Reminder: `<ISO8601>`" line right after it (or
+/// as the very first content line, if there's no heading) becomes
+/// [Note.reminderAt], and everything else becomes the body untouched -
+/// note bodies already use GitHub-Flavored-Markdown checklist syntax (see
 /// note_body_editor.dart), so no conversion is needed either direction.
 class MarkdownImportService {
   static final MarkdownImportService instance = MarkdownImportService._();
@@ -29,6 +31,11 @@ class MarkdownImportService {
   MarkdownImportService._();
 
   final Uuid _uuid = const Uuid();
+
+  // Matches exactly what MarkdownExportService.toMarkdown writes; a line
+  // that doesn't match just becomes part of the body like any other line,
+  // no crash or data loss either way.
+  static final RegExp _reminderLinePattern = RegExp(r'^Reminder:\s*(.+)$');
 
   /// [filesByName] maps each picked file's display name (used to derive a
   /// fallback title when there's no heading) to its raw bytes.
@@ -66,6 +73,28 @@ class MarkdownImportService {
       bodyStartIndex = 0;
     }
 
+    // Look for a "Reminder: <ISO8601>" line right after the heading (or at
+    // the very start, if there was none) - tolerating a blank line before
+    // it, though toMarkdown never actually puts one there. A line that
+    // doesn't match, or a date that fails to parse, is left alone to
+    // become part of the body instead of being silently dropped.
+    var reminderLineIndex = bodyStartIndex;
+    while (reminderLineIndex < lines.length &&
+        lines[reminderLineIndex].trim().isEmpty) {
+      reminderLineIndex++;
+    }
+    DateTime? reminderAt;
+    if (reminderLineIndex < lines.length) {
+      final match = _reminderLinePattern.firstMatch(lines[reminderLineIndex]);
+      if (match != null) {
+        final parsed = DateTime.tryParse(match.group(1)!.trim());
+        if (parsed != null) {
+          reminderAt = parsed.toLocal();
+          bodyStartIndex = reminderLineIndex + 1;
+        }
+      }
+    }
+
     final body = lines.skip(bodyStartIndex).join('\n').trim();
 
     return Note(
@@ -73,6 +102,7 @@ class MarkdownImportService {
       title: title,
       body: body,
       colorIndex: 0,
+      reminderAt: reminderAt,
       created: now,
       updated: now,
     );

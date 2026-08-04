@@ -69,9 +69,9 @@ void main() {
   setUp(() {
     canceledIds.clear();
     NotificationService.instance.debugOnCancel = canceledIds.add;
-    // markReminderResolved (Dismiss/Snooze/Open note) touches
-    // SharedPreferences - unmocked, the plugin has no platform
-    // implementation registered in this test environment.
+    // markReminderResolved (Dismiss/Snooze) touches SharedPreferences -
+    // unmocked, the plugin has no platform implementation registered in
+    // this test environment.
     SharedPreferences.setMockInitialValues({});
   });
 
@@ -132,7 +132,7 @@ void main() {
       expect(find.byKey(const Key('title_field')), findsNothing);
       expect(canceledIds, contains(note.notificationId));
       expect(
-        await NotificationService.instance.debugIsReminderResolved(note.id),
+        await NotificationService.instance.isReminderResolved(note.id),
         isTrue,
       );
     },
@@ -155,36 +155,35 @@ void main() {
       expect(find.byKey(const Key('title_field')), findsNothing);
       expect(canceledIds, isEmpty);
       expect(
-        await NotificationService.instance.debugIsReminderResolved(note.id),
+        await NotificationService.instance.isReminderResolved(note.id),
         isFalse,
       );
     },
   );
 
-  testWidgets(
-    'Open note closes the popup, navigates to the editor, cancels the '
-    'tray notification, and marks the reminder resolved',
-    (tester) async {
-      final host = await _pumpHost(tester);
-      final note = _note();
+  testWidgets('Open note closes the popup and navigates to the editor, without '
+      'cancelling the tray notification or marking the reminder resolved - '
+      'looking at a note isn\'t the same as deciding you\'re done with its '
+      'reminder', (tester) async {
+    final host = await _pumpHost(tester);
+    final note = _note();
 
-      showReminderPopup(host.context, host.ref, note);
-      await tester.pumpAndSettle();
+    showReminderPopup(host.context, host.ref, note);
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Open note'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('Open note'));
+    await tester.pumpAndSettle();
 
-      // The popup itself is gone, and the note editor (identified by its
-      // title field) is now showing with the same note's title loaded.
-      expect(find.byKey(const Key('title_field')), findsOneWidget);
-      expect(find.text('Take out the trash'), findsOneWidget);
-      expect(canceledIds, contains(note.notificationId));
-      expect(
-        await NotificationService.instance.debugIsReminderResolved(note.id),
-        isTrue,
-      );
-    },
-  );
+    // The popup itself is gone, and the note editor (identified by its
+    // title field) is now showing with the same note's title loaded.
+    expect(find.byKey(const Key('title_field')), findsOneWidget);
+    expect(find.text('Take out the trash'), findsOneWidget);
+    expect(canceledIds, isEmpty);
+    expect(
+      await NotificationService.instance.isReminderResolved(note.id),
+      isFalse,
+    );
+  });
 
   testWidgets('Snooze cancels the tray notification, then picking a new time '
       'saves the note with the updated reminder', (tester) async {
@@ -202,7 +201,7 @@ void main() {
     expect(find.text('Take out the trash'), findsNothing);
     expect(canceledIds, contains(note.notificationId));
     expect(
-      await NotificationService.instance.debugIsReminderResolved(note.id),
+      await NotificationService.instance.isReminderResolved(note.id),
       isTrue,
     );
 

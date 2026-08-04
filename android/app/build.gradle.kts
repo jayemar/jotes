@@ -61,4 +61,10 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // For the home-screen widgets - see the plugins block above.
     implementation("androidx.glance:glance-appwidget:1.1.1")
+    // For BootRestoreWorker/BootRestoreReceiver - see their own doc
+    // comments for why a WorkManager Worker, not a foreground Service, is
+    // what actually runs reliably when triggered from BOOT_COMPLETED on
+    // Android 14+. Declared explicitly rather than relying on this
+    // already being a transitive dependency of another plugin.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }

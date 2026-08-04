@@ -11,12 +11,14 @@ Note _note({
   String? id,
   String title = 'Title',
   String body = 'Body',
+  DateTime? reminderAt,
 }) {
   final now = DateTime.now();
   return Note(
     id: id ?? 'note-id-12345678',
     title: title,
     body: body,
+    reminderAt: reminderAt,
     created: now,
     updated: now,
   );
@@ -25,20 +27,23 @@ Note _note({
 void main() {
   group('MarkdownExportService.toMarkdown', () {
     test('a note with both title and body becomes a heading plus body', () {
-      final md = MarkdownExportService.instance
-          .toMarkdown(_note(title: 'Groceries', body: 'Milk\nEggs'));
+      final md = MarkdownExportService.instance.toMarkdown(
+        _note(title: 'Groceries', body: 'Milk\nEggs'),
+      );
       expect(md, '# Groceries\n\nMilk\nEggs');
     });
 
     test('a title-only note has no trailing blank body section', () {
-      final md =
-          MarkdownExportService.instance.toMarkdown(_note(title: 'Just a title', body: ''));
+      final md = MarkdownExportService.instance.toMarkdown(
+        _note(title: 'Just a title', body: ''),
+      );
       expect(md, '# Just a title');
     });
 
     test('a body-only note (no title) has no heading', () {
-      final md =
-          MarkdownExportService.instance.toMarkdown(_note(title: '', body: 'Just body text'));
+      final md = MarkdownExportService.instance.toMarkdown(
+        _note(title: '', body: 'Just body text'),
+      );
       expect(md, 'Just body text');
     });
 
@@ -48,25 +53,69 @@ void main() {
       );
       expect(md, '# Todo\n\n- [x] Done\n- [ ] Not done');
     });
+
+    test('a reminder is written as a "Reminder: <ISO8601>" line, in UTC, '
+        'right after the heading', () {
+      final md = MarkdownExportService.instance.toMarkdown(
+        _note(
+          title: 'Groceries',
+          body: 'Milk',
+          reminderAt: DateTime.utc(2026, 7, 19, 1, 15),
+        ),
+      );
+      expect(md, '# Groceries\nReminder: 2026-07-19T01:15:00.000Z\n\nMilk');
+    });
+
+    test('a reminder with no body has no trailing blank body section', () {
+      final md = MarkdownExportService.instance.toMarkdown(
+        _note(
+          title: 'Groceries',
+          body: '',
+          reminderAt: DateTime.utc(2026, 7, 19, 1, 15),
+        ),
+      );
+      expect(md, '# Groceries\nReminder: 2026-07-19T01:15:00.000Z');
+    });
+
+    test('a reminder with no title still gets its own line, not a heading', () {
+      final md = MarkdownExportService.instance.toMarkdown(
+        _note(
+          title: '',
+          body: 'Milk',
+          reminderAt: DateTime.utc(2026, 7, 19, 1, 15),
+        ),
+      );
+      expect(md, 'Reminder: 2026-07-19T01:15:00.000Z\n\nMilk');
+    });
+
+    test('a note with no reminder has no "Reminder:" line at all', () {
+      final md = MarkdownExportService.instance.toMarkdown(
+        _note(title: 'Groceries', body: 'Milk'),
+      );
+      expect(md, isNot(contains('Reminder:')));
+    });
   });
 
   group('MarkdownExportService.suggestedFilename', () {
     test('sanitizes filesystem-forbidden characters out of the title', () {
-      final name = MarkdownExportService.instance
-          .suggestedFilename(_note(title: 'a/b:c*d?e"f<g>h|i'));
+      final name = MarkdownExportService.instance.suggestedFilename(
+        _note(title: 'a/b:c*d?e"f<g>h|i'),
+      );
       expect(name, 'abcdefghi');
     });
 
     test('collapses internal whitespace but keeps single spaces', () {
-      final name = MarkdownExportService.instance
-          .suggestedFilename(_note(title: 'a   b\tc'));
+      final name = MarkdownExportService.instance.suggestedFilename(
+        _note(title: 'a   b\tc'),
+      );
       expect(name, 'a b c');
     });
 
     test('falls back to an id-derived name when the title sanitizes to '
         'nothing', () {
-      final name = MarkdownExportService.instance
-          .suggestedFilename(_note(id: 'abcdefgh-1234', title: '///???'));
+      final name = MarkdownExportService.instance.suggestedFilename(
+        _note(id: 'abcdefgh-1234', title: '///???'),
+      );
       expect(name, 'note-abcdefgh');
     });
   });
@@ -82,7 +131,8 @@ void main() {
       expect(archive.files, hasLength(2));
 
       final contents = {
-        for (final f in archive.files) f.name: utf8.decode(f.content as List<int>),
+        for (final f in archive.files)
+          f.name: utf8.decode(f.content as List<int>),
       };
       expect(contents['First.md'], '# First\n\nOne');
       expect(contents['Second.md'], '# Second\n\nTwo');
@@ -114,5 +164,29 @@ void main() {
 
     expect(result.notes.single.title, original.title);
     expect(result.notes.single.body, original.body);
+  });
+
+  test('a note with a reminder round-trips it too, not just title and '
+      'body', () {
+    final original = _note(
+      title: 'Round trip',
+      body: 'Some text',
+      reminderAt: DateTime.utc(2026, 7, 19, 1, 15),
+    );
+
+    final md = MarkdownExportService.instance.toMarkdown(original);
+    final result = MarkdownImportService.instance.parseFiles({
+      'export.md': Uint8List.fromList(utf8.encode(md)),
+    });
+
+    expect(result.notes.single.title, original.title);
+    expect(result.notes.single.body, original.body);
+    // Not a plain == - re-importing converts back to local time (matching
+    // Note.fromPocketBase's own convention), same moment in time but a
+    // different DateTime.isUtc, which DateTime's own == treats as unequal.
+    expect(
+      result.notes.single.reminderAt!.isAtSameMomentAs(original.reminderAt!),
+      isTrue,
+    );
   });
 }

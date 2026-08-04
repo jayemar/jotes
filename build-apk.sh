@@ -20,9 +20,24 @@ while getopts "t:" opt; do
 done
 
 APP_VERSION=$(awk '/^version:/{print $2}' pubspec.yaml | cut -d'+' -f1)
+BUILD_NUMBER=$(awk '/^version:/{print $2}' pubspec.yaml | cut -d'+' -f2)
+
+# A release APK is what actually gets installed/updated on a device, so its
+# versionCode (this build number) needs to keep increasing - otherwise
+# Android's package installer can't reliably tell a new install from an
+# in-place update of the same app, and special access grants like full-
+# screen-intent permission (see NotificationService.initialize) get reset
+# instead of carried over. Debug builds are only ever run via `flutter run`
+# during iteration, never distributed, so they don't need this.
+if [ "$BUILD_TYPE" = "release" ]; then
+    NEW_BUILD_NUMBER=$((BUILD_NUMBER + 1))
+    sed -i "s/^version: ${APP_VERSION}+${BUILD_NUMBER}$/version: ${APP_VERSION}+${NEW_BUILD_NUMBER}/" pubspec.yaml
+    BUILD_NUMBER="$NEW_BUILD_NUMBER"
+fi
+
 BUILD_TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 
-echo "Building ${BUILD_TYPE} APK (version ${APP_VERSION})..."
+echo "Building ${BUILD_TYPE} APK (version ${APP_VERSION}+${BUILD_NUMBER})..."
 flutter build apk "--${BUILD_TYPE}" --dart-define="BUILD_TIMESTAMP=${BUILD_TIMESTAMP}"
 
 APK_PATH="build/app/outputs/flutter-apk/app-${BUILD_TYPE}.apk"

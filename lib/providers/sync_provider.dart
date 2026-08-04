@@ -1,4 +1,6 @@
+import 'dart:io' show HandshakeException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pocketbase/pocketbase.dart' show ClientException;
 import '../models/note.dart';
 import '../services/db_service.dart';
 import '../services/notification_service.dart';
@@ -65,7 +67,10 @@ class SyncNotifier extends Notifier<SyncState> {
       );
       await _startSync();
     } catch (e) {
-      state = SyncState(status: SyncStatus.error, errorMessage: e.toString());
+      state = SyncState(
+        status: SyncStatus.error,
+        errorMessage: describeConnectError(e),
+      );
     }
   }
 
@@ -131,3 +136,24 @@ class SyncNotifier extends Notifier<SyncState> {
 final syncProvider = NotifierProvider<SyncNotifier, SyncState>(
   SyncNotifier.new,
 );
+
+/// PocketBase's ClientException.toString() is technically informative but
+/// reads as a raw error dump ({url: ..., originalError: HandshakeException:
+/// ... WRONG_VERSION_NUMBER ...}) - not something a self-hoster can act on.
+/// A TLS handshake failure against a server actually speaking plain HTTP is
+/// a mistake this project's own default deployment invites (backend/
+/// Dockerfile starts PocketBase with --http, not --https), so that specific
+/// case gets a clear, actionable message; everything else falls back to the
+/// exception's own text.
+String describeConnectError(Object error) {
+  final original = error is ClientException ? error.originalError : null;
+  final osErrorMessage = original is HandshakeException
+      ? original.osError?.message
+      : null;
+  if (osErrorMessage?.contains('WRONG_VERSION_NUMBER') ?? false) {
+    return "Couldn't establish a secure connection - the server appears to "
+        'be speaking plain HTTP, not HTTPS, on this URL. Try http:// '
+        'instead of https://.';
+  }
+  return error.toString();
+}

@@ -6,6 +6,74 @@ import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/note_editor_screen.dart';
 import 'package:jotes/widgets/note_body_editor.dart';
 
+void main() {
+  group('formatTimeUntilReminder', () {
+    final now = DateTime(2026, 1, 1, 12);
+
+    test('spells out days, hours, and minutes together with an Oxford '
+        'comma', () {
+      expect(
+        formatTimeUntilReminder(
+          now.add(const Duration(days: 2, hours: 4, minutes: 35)),
+          now: now,
+        ),
+        'in 2 days, 4 hours, and 35 minutes',
+      );
+    });
+
+    test('omits a zero-valued middle unit (hours) instead of showing '
+        '"0 hours"', () {
+      expect(
+        formatTimeUntilReminder(
+          now.add(const Duration(days: 2, minutes: 35)),
+          now: now,
+        ),
+        'in 2 days and 35 minutes',
+      );
+    });
+
+    test('singular day is not pluralized', () {
+      expect(
+        formatTimeUntilReminder(now.add(const Duration(days: 1)), now: now),
+        'in 1 day',
+      );
+    });
+
+    test('falls back to hours once under a day', () {
+      expect(
+        formatTimeUntilReminder(
+          now.add(const Duration(hours: 3, minutes: 30)),
+          now: now,
+        ),
+        'in 3 hours and 30 minutes',
+      );
+    });
+
+    test('falls back to minutes once under an hour', () {
+      expect(
+        formatTimeUntilReminder(now.add(const Duration(minutes: 45)), now: now),
+        'in 45 minutes',
+      );
+    });
+
+    test('singular minute is not pluralized', () {
+      expect(
+        formatTimeUntilReminder(now.add(const Duration(minutes: 1)), now: now),
+        'in 1 minute',
+      );
+    });
+
+    test('under a minute away', () {
+      expect(
+        formatTimeUntilReminder(now.add(const Duration(seconds: 30)), now: now),
+        'in less than a minute',
+      );
+    });
+  });
+
+  _mainWidgetTests();
+}
+
 Note _existingNote({String body = 'One line', DateTime? reminderAt}) {
   final now = DateTime.now();
   return Note(
@@ -24,10 +92,13 @@ Note _existingNote({String body = 'One line', DateTime? reminderAt}) {
 /// fake-async pump cycle, so it hangs pumpAndSettle (see
 /// notes_screen_selection_test.dart for the same lesson).
 class _RecordingNotesNotifier extends NotesNotifier {
+  _RecordingNotesNotifier([this._initial = const []]);
+  final List<Note> _initial;
   final List<Note> saved = [];
+  final List<Note> deleted = [];
 
   @override
-  Future<List<Note>> build() async => const [];
+  Future<List<Note>> build() async => _initial;
 
   @override
   Future<String?> addOrUpdate(Note note) async {
@@ -35,11 +106,26 @@ class _RecordingNotesNotifier extends NotesNotifier {
     state = AsyncData([note]);
     return null;
   }
+
+  @override
+  Future<void> delete(Note note) async {
+    deleted.add(note);
+    state = const AsyncData([]);
+  }
+
+  /// Simulates an update landing through the realtime sync subscription
+  /// from another device - see SyncNotifier._handleRemoteEvent, which ends
+  /// the same way (an upsert into the local store followed by invalidating
+  /// notesProvider) but isn't itself exercised here; this only needs to
+  /// look, from NoteEditorScreen's point of view, like notesProvider's
+  /// state changed out from under it.
+  void pushRemoteUpdate(Note note) {
+    state = AsyncData([note]);
+  }
 }
 
-void main() {
-  testWidgets(
-      'tapping the blank space below the body text focuses it and '
+void _mainWidgetTests() {
+  testWidgets('tapping the blank space below the body text focuses it and '
       'places the cursor at the end', (tester) async {
     final note = _existingNote(body: 'One line');
     await tester.pumpWidget(
@@ -88,36 +174,47 @@ void main() {
   });
 
   testWidgets(
-      'setting a reminder shows a confirmation snackbar with the chosen '
-      'time', (tester) async {
-    final notifier = _RecordingNotesNotifier();
-    final container = ProviderContainer(
-      overrides: [notesProvider.overrideWith(() => notifier)],
-    );
-    addTearDown(container.dispose);
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: const MaterialApp(home: NoteEditorScreen()),
-      ),
-    );
-    await tester.pumpAndSettle();
+    'setting a reminder shows a confirmation dialog with the chosen time, '
+    'requiring an explicit OK rather than auto-dismissing like a toast',
+    (tester) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: NoteEditorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Set reminder'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Set reminder'));
+      await tester.pumpAndSettle();
 
-    // Confirm the date picker, then the time picker, each with their
-    // pre-filled initial value.
-    await tester.tap(find.text('OK'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OK'));
-    await tester.pumpAndSettle();
+      // Confirm the date picker, then the time picker, each with their
+      // pre-filled initial value.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
 
-    expect(find.textContaining('Reminder set for'), findsOneWidget);
-  });
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('Reminder set'), findsOneWidget);
 
-  testWidgets(
-      'a brand-new note with only a reminder set (no title or body) is '
+      // Still up (not an auto-dismissing toast) until OK is tapped.
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+    },
+  );
+
+  testWidgets('a brand-new note with only a reminder set (no title or body) is '
       'saved and scheduled immediately, not deferred until the screen is '
       'popped, and not discarded as an empty note', (tester) async {
     final notifier = _RecordingNotesNotifier();
@@ -149,11 +246,151 @@ void main() {
   });
 
   testWidgets(
-      'tapping the reminder chip for an upcoming reminder offers to edit '
-      'or remove it, rather than removing it outright', (tester) async {
-    final note = _existingNote(
-      reminderAt: DateTime.now().add(const Duration(hours: 1)),
-    );
+    'tapping the reminder chip for an upcoming reminder offers to edit '
+    'or remove it, rather than removing it outright',
+    (tester) async {
+      final note = _existingNote(
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.alarm));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Edit reminder'), findsOneWidget);
+      expect(find.text('Reset reminder'), findsNothing);
+      expect(find.text('Remove reminder'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'choosing Remove from the reminder options clears the chip and saves '
+    'immediately, not deferred until the screen is popped',
+    (tester) async {
+      final note = _existingNote(
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
+      );
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.alarm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove reminder'));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.alarm), findsNothing);
+      expect(find.byIcon(Icons.alarm_off), findsNothing);
+      // Never navigated back / popped the screen - if the save were still
+      // deferred to PopScope, this would be empty (same reasoning as the
+      // brand-new-note-with-reminder test above).
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.reminderAt, isNull);
+    },
+  );
+
+  testWidgets(
+    'the reminder chip for an expired reminder offers to reset it (not '
+    '"edit", since it is no longer pending), and resetting it through the '
+    "picker succeeds instead of crashing on the picker's own "
+    'initialDate/firstDate constraint',
+    (tester) async {
+      final note = _existingNote(
+        reminderAt: DateTime.now().subtract(const Duration(days: 1)),
+      );
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The chip itself should already reflect the expired state.
+      expect(find.byIcon(Icons.alarm_off), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.alarm_off));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Reset reminder'), findsOneWidget);
+      expect(find.text('Edit reminder'), findsNothing);
+
+      await tester.tap(find.text('Reset reminder'));
+      await tester.pumpAndSettle();
+      // Confirming the date and time pickers must not throw despite the
+      // note's existing reminder being in the past.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      // Dismiss the "Reminder set" confirmation dialog.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, isNotEmpty);
+      expect(notifier.saved.last.reminderAt!.isAfter(DateTime.now()), isTrue);
+    },
+  );
+
+  testWidgets(
+    'the toolbar Undo button is disabled until a structural checklist '
+    'change happens, then reverts it when tapped',
+    (tester) async {
+      final note = _existingNote(body: '- [ ] keep me\n- [ ] remove me');
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Finder undoButton() => find.widgetWithIcon(IconButton, Icons.undo);
+
+      expect(tester.widget<IconButton>(undoButton()).onPressed, isNull);
+
+      await tester.tap(find.byIcon(Icons.close).last);
+      await tester.pumpAndSettle();
+      expect(find.text('remove me'), findsNothing);
+      expect(tester.widget<IconButton>(undoButton()).onPressed, isNotNull);
+
+      await tester.tap(undoButton());
+      await tester.pumpAndSettle();
+
+      expect(find.text('remove me'), findsOneWidget);
+      expect(tester.widget<IconButton>(undoButton()).onPressed, isNull);
+    },
+  );
+
+  testWidgets('the toolbar has a three-dot menu on the far right that reveals '
+      '"Export as Markdown", rather than a direct icon button for it', (
+    tester,
+  ) async {
+    final note = _existingNote(body: 'plain text');
     await tester.pumpWidget(
       ProviderScope(
         child: MaterialApp(home: NoteEditorScreen(existing: note)),
@@ -161,50 +398,127 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.alarm));
+    expect(find.byIcon(Icons.ios_share_outlined), findsNothing);
+    expect(find.byKey(const Key('note_more_menu')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('note_more_menu')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Edit reminder'), findsOneWidget);
-    expect(find.text('Reset reminder'), findsNothing);
-    expect(find.text('Remove reminder'), findsOneWidget);
+    expect(find.text('Export as Markdown'), findsOneWidget);
   });
 
-  testWidgets('choosing Remove from the reminder options clears the chip',
-      (tester) async {
-    final note = _existingNote(
-      reminderAt: DateTime.now().add(const Duration(hours: 1)),
-    );
-    final notifier = _RecordingNotesNotifier();
-    final container = ProviderContainer(
-      overrides: [notesProvider.overrideWith(() => notifier)],
-    );
-    addTearDown(container.dispose);
+  testWidgets('the three-dot menu also offers Share, Copy, and Delete for an '
+      'existing note', (tester) async {
+    final note = _existingNote(body: 'plain text');
     await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
+      ProviderScope(
         child: MaterialApp(home: NoteEditorScreen(existing: note)),
       ),
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.alarm));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Remove reminder'));
+    await tester.tap(find.byKey(const Key('note_more_menu')));
     await tester.pumpAndSettle();
 
-    expect(find.byIcon(Icons.alarm), findsNothing);
-    expect(find.byIcon(Icons.alarm_off), findsNothing);
+    expect(find.text('Share'), findsOneWidget);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Delete'), findsOneWidget);
   });
 
   testWidgets(
-      'the reminder chip for an expired reminder offers to reset it '
-      '(not "edit", since it is no longer pending), and resetting it '
-      'through the picker succeeds instead of crashing on the picker\'s '
-      'own initialDate/firstDate constraint', (tester) async {
-    final note = _existingNote(
-      reminderAt: DateTime.now().subtract(const Duration(days: 1)),
-    );
-    final notifier = _RecordingNotesNotifier();
+    'Copy and Delete are not offered for a brand-new, never-saved note - '
+    "there's nothing persisted yet to duplicate or remove",
+    (tester) async {
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Share'), findsOneWidget);
+      expect(find.text('Copy'), findsNothing);
+      expect(find.text('Delete'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'choosing Copy from the menu saves a duplicate with a fresh id and no '
+    'reminder, and stays on the original note',
+    (tester) async {
+      final note = _existingNote(
+        body: 'plain text',
+      ).copyWith(reminderAt: DateTime.now().add(const Duration(hours: 1)));
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Copy'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, hasLength(1));
+      final copy = notifier.saved.single;
+      expect(copy.id, isNot(note.id));
+      expect(copy.title, note.title);
+      expect(copy.body, note.body);
+      expect(copy.reminderAt, isNull);
+      expect(find.text('Note copied'), findsOneWidget);
+
+      // Still on the original note, not navigated away.
+      expect(find.byTooltip('Reminder options'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'choosing Delete asks for confirmation first; cancelling leaves the '
+    'note untouched and the screen open',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete note?'), findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.deleted, isEmpty);
+      expect(find.byKey(const Key('title_field')), findsOneWidget);
+    },
+  );
+
+  testWidgets('confirming Delete removes the note and closes the screen', (
+    tester,
+  ) async {
+    final note = _existingNote(body: 'plain text');
+    final notifier = _RecordingNotesNotifier([note]);
     final container = ProviderContainer(
       overrides: [notesProvider.overrideWith(() => notifier)],
     );
@@ -212,33 +526,273 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => NoteEditorScreen(existing: note),
+                    ),
+                  ),
+                  child: const Text('open note'),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
     await tester.pumpAndSettle();
-
-    // The chip itself should already reflect the expired state.
-    expect(find.byIcon(Icons.alarm_off), findsOneWidget);
-
-    await tester.tap(find.byIcon(Icons.alarm_off));
+    await tester.tap(find.text('open note'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Reset reminder'), findsOneWidget);
-    expect(find.text('Edit reminder'), findsNothing);
-
-    await tester.tap(find.text('Reset reminder'));
+    await tester.tap(find.byKey(const Key('note_more_menu')));
     await tester.pumpAndSettle();
-    // Confirming the date and time pickers must not throw despite the
-    // note's existing reminder being in the past.
-    await tester.tap(find.text('OK'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OK'));
+    await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
 
-    expect(notifier.saved, isNotEmpty);
-    expect(
-      notifier.saved.last.reminderAt!.isAfter(DateTime.now()),
-      isTrue,
+    final deleteButtons = find.widgetWithText(FilledButton, 'Delete');
+    await tester.tap(deleteButtons);
+    await tester.pumpAndSettle();
+
+    expect(notifier.deleted, [note]);
+    // Back on the launcher screen, note screen popped.
+    expect(find.text('open note'), findsOneWidget);
+    expect(find.byKey(const Key('title_field')), findsNothing);
+  });
+
+  testWidgets(
+    'the back button while the body editor is mid-edit backs out of edit '
+    'mode instead of popping (and saving) the whole note screen',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('plain text'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TextField), findsWidgets);
+
+      // Simulates the Android hardware/gesture back button, which is what
+      // actually routes through PopScope on the root route - see the same
+      // pattern/reasoning in notes_screen_selection_test.dart.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      // Still on the note screen (not popped/saved) - the reminder pill
+      // button is only present on this screen, not wherever a pop would
+      // have gone.
+      expect(find.byTooltip('Set reminder'), findsOneWidget);
+      expect(notifier.saved, isEmpty);
+
+      // A second back press now genuinely pops (and saves) the screen,
+      // confirming the first press only consumed the edit-mode exit.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, hasLength(1));
+    },
+  );
+
+  group('live sync while a note is open', () {
+    testWidgets(
+      'typing autosaves after a short pause, without needing to close the '
+      'note - previously an open note only ever saved when the screen was '
+      'popped',
+      (tester) async {
+        final note = _existingNote(body: 'original body');
+        final notifier = _RecordingNotesNotifier([note]);
+        final container = ProviderContainer(
+          overrides: [notesProvider.overrideWith(() => notifier)],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('title_field')),
+          'New title',
+        );
+        // Not saved immediately - only after the debounce elapses.
+        expect(notifier.saved, isEmpty);
+
+        await tester.pump(const Duration(seconds: 3));
+
+        expect(notifier.saved, hasLength(1));
+        expect(notifier.saved.single.title, 'New title');
+      },
     );
+
+    testWidgets('an update to this note made on another device is applied live '
+        "while this device's copy is open and untouched, so a second "
+        'device can follow along as it changes', (tester) async {
+      final note = _existingNote(body: 'original body');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final remoteNote = note.copyWith(
+        title: 'Edited elsewhere',
+        body: 'new body from another device',
+        updated: note.updated.add(const Duration(seconds: 1)),
+      );
+      notifier.pushRemoteUpdate(remoteNote);
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('title_field')))
+            .controller!
+            .text,
+        'Edited elsewhere',
+      );
+      expect(find.text('new body from another device'), findsOneWidget);
+    });
+
+    testWidgets('a remote update is not applied while this device has its own '
+        "unsaved edits in flight, so it can't clobber what's being typed", (
+      tester,
+    ) async {
+      final note = _existingNote(body: 'original body');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('title_field')),
+        'Not yet saved',
+      );
+      await tester.pump();
+
+      final remoteNote = note.copyWith(
+        title: 'Edited elsewhere',
+        updated: note.updated.add(const Duration(seconds: 1)),
+      );
+      notifier.pushRemoteUpdate(remoteNote);
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('title_field')))
+            .controller!
+            .text,
+        'Not yet saved',
+      );
+    });
+
+    testWidgets(
+      'a remote update is not applied while the title field is focused, '
+      'even with nothing typed yet, since resetting a focused field out '
+      "from under the user's cursor would be jarring",
+      (tester) async {
+        final note = _existingNote(body: 'original body');
+        final notifier = _RecordingNotesNotifier([note]);
+        final container = ProviderContainer(
+          overrides: [notesProvider.overrideWith(() => notifier)],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('title_field')));
+        await tester.pumpAndSettle();
+
+        final remoteNote = note.copyWith(
+          title: 'Edited elsewhere',
+          updated: note.updated.add(const Duration(seconds: 1)),
+        );
+        notifier.pushRemoteUpdate(remoteNote);
+        await tester.pumpAndSettle();
+
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('title_field')))
+              .controller!
+              .text,
+          'Title',
+        );
+      },
+    );
+
+    testWidgets("this screen's own save echoing back through the realtime "
+        'subscription is not reapplied to itself (it would be a harmless '
+        'no-op content-wise, but would still reset the focused title '
+        "field's cursor for no reason)", (tester) async {
+      final note = _existingNote(body: 'original body');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('title_field')),
+        'Saved by me',
+      );
+      await tester.pump(const Duration(seconds: 3));
+      expect(notifier.saved, hasLength(1));
+
+      // Focus the field again, as if the user tapped back into it right
+      // after the autosave landed - the echoed update (already pushed
+      // to `saved` above, mirroring what the real subscribe() -> upsert
+      // -> invalidate chain would do) must not disturb it.
+      await tester.tap(find.byKey(const Key('title_field')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('title_field')))
+            .controller!
+            .text,
+        'Saved by me',
+      );
+    });
   });
 }

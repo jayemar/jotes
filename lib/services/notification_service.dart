@@ -1,15 +1,23 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/widgets.dart' show WidgetsFlutterBinding;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import '../models/note.dart';
 import 'db_service.dart';
+import 'pb_service.dart';
+import 'snooze_settings.dart';
 
 const _channelId = 'jotes_reminders';
 const _channelName = 'Reminders';
+
+// Ids for the notification actions below - reported back via
+// NotificationResponse.actionId in handleBackgroundReminderAction.
+const _dismissActionId = 'dismiss';
+const _snoozeActionId = 'snooze';
 
 /// Note ids whose reminder has already been handled once - either fired
 /// normally via AlarmManager, or shown immediately as an overdue catch-up
@@ -29,12 +37,14 @@ const _channelName = 'Reminders';
 const _handledReminderIdsPrefsKey = 'handled_reminder_note_ids';
 
 /// Note ids whose reminder the user has explicitly acted on for the
-/// current cycle - Dismiss, Snooze, or Open note (see reminder_popup.dart
-/// and main.dart's _openNoteFromWidget). Deliberately NOT set by Ignore or
-/// by merely viewing the popup - see restoreUnresolvedReminders, which
-/// uses this to decide what should reappear after a restart. Cleared
-/// whenever schedule() starts a fresh cycle for a note (see schedule()),
-/// so a past cycle's resolution doesn't leak into the next one.
+/// current cycle - Dismiss or Snooze (see reminder_popup.dart).
+/// Deliberately NOT set by Open note or Ignore, nor by merely viewing the
+/// popup/notification - opening a note to look at it isn't the same as
+/// deciding you're done with its reminder. Used by restoreUnresolvedReminders
+/// to decide what should reappear after a restart, and by WidgetService to
+/// decide what the Scheduled Reminders widget still lists. Cleared whenever
+/// schedule() starts a fresh cycle for a note (see schedule()), so a past
+/// cycle's resolution doesn't leak into the next one.
 const _resolvedReminderIdsPrefsKey = 'resolved_reminder_note_ids';
 
 NotificationDetails _reminderNotificationDetails(Note note) {
@@ -55,10 +65,45 @@ NotificationDetails _reminderNotificationDetails(Note note) {
       // Without this, merely tapping the notification to view it (which
       // the plugin treats as the same thing as opening it) auto-cancels it
       // before the user picks anything in the popup - silently breaking
-      // "Ignore," which is specifically supposed to leave it in place.
-      // Every path that should actually clear the tray entry (Dismiss,
-      // Snooze, Open note) now does so explicitly via cancel() instead.
+      // "Ignore" (and "Open note," which also shouldn't clear it - opening
+      // a note to look at it isn't deciding you're done with its
+      // reminder). Only Dismiss/Snooze should ever clear the tray entry,
+      // and they do so explicitly via cancel() instead.
       autoCancel: false,
+      // A swipe otherwise removes the notification with no way for the
+      // app to find out - Android has no callback for that - leaving
+      // resolved/handled state permanently out of sync with what's
+      // actually in the tray. Marking it ongoing disables swipe-to-dismiss
+      // (and "Clear all") entirely, so the only way to remove it is
+      // through Dismiss/Snooze, which already call cancel() explicitly and
+      // keep that state correct.
+      ongoing: true,
+      // Real inline buttons on the notification itself, usable straight
+      // from the shade with no app UI ever opening (showsUserInterface:
+      // false routes the tap to handleBackgroundReminderAction below,
+      // not onDidReceiveNotificationResponse). Snooze can't offer an
+      // arbitrary date/time picker here - Android has no such picker UI
+      // that renders inside a notification action - so it uses a single
+      // fixed duration instead, configured once in Settings (see
+      // SnoozeSettings) rather than as a per-action choice - three buttons
+      // (Dismiss + two fixed-duration snoozes) didn't reliably fit
+      // on-screen, so this collapsed to two. Distinct from Dismiss/Snooze
+      // inside the reminder popup shown when the notification *body* is
+      // tapped (see reminder_popup.dart), which is unaffected by this.
+      actions: const [
+        AndroidNotificationAction(
+          _dismissActionId,
+          'Dismiss',
+          showsUserInterface: false,
+          cancelNotification: true,
+        ),
+        AndroidNotificationAction(
+          _snoozeActionId,
+          'Snooze',
+          showsUserInterface: false,
+          cancelNotification: true,
+        ),
+      ],
     ),
   );
 }
@@ -75,7 +120,20 @@ class NotificationService {
   /// A tap that cold-starts the app instead is handled by [getLaunchNoteId].
   Stream<String> get onNoteTapped => _tapController.stream;
 
-  Future<void> initialize() async {
+  /// [requestPermissions] must be false when called from
+  /// handleBackgroundReminderAction's background isolate - confirmed via
+  /// on-device logcat that requestNotificationsPermission (and friends)
+  /// crash native-side with a NullPointerException there (they need an
+  /// Activity, and a background isolate only ever has an
+  /// applicationContext). Worse than a normal crash: the native side never
+  /// sends a platform-channel result back, so the `await` on it hangs
+  /// forever rather than throwing something Dart could catch - silently
+  /// stalling this function before it ever reaches
+  /// markReminderResolved/cancel/schedule below. Requesting permissions is
+  /// meaningless from a background isolate anyway (nothing there could
+  /// show a system permission dialog even if the call worked), so this is
+  /// skipped entirely rather than merely tolerated.
+  Future<void> initialize({bool requestPermissions = true}) async {
     // flutter_local_notifications has no web platform implementation at
     // all - calling into it on web throws before runApp() ever gets a
     // chance to render, leaving a blank page. Reminders are an
@@ -91,7 +149,11 @@ class NotificationService {
         final noteId = response.payload;
         if (noteId != null) _tapController.add(noteId);
       },
+      onDidReceiveBackgroundNotificationResponse:
+          handleBackgroundReminderAction,
     );
+
+    if (!requestPermissions) return;
 
     final androidImpl = _plugin
         .resolvePlatformSpecificImplementation<
@@ -281,22 +343,17 @@ class NotificationService {
     ]);
   }
 
-  Future<bool> _reminderResolved(String noteId) async {
+  /// Also used by WidgetService to decide what the Scheduled Reminders
+  /// widget still lists, not just internally here.
+  Future<bool> isReminderResolved(String noteId) async {
     final prefs = await SharedPreferences.getInstance();
     final resolved = prefs.getStringList(_resolvedReminderIdsPrefsKey) ?? [];
     return resolved.contains(noteId);
   }
 
-  /// Test-only read access to the same state _reminderResolved checks -
-  /// same reasoning as the debugOnCancel/debugOnShow hooks above, just for
-  /// a value rather than a plugin call.
-  @visibleForTesting
-  Future<bool> debugIsReminderResolved(String noteId) =>
-      _reminderResolved(noteId);
-
-  /// Called from Dismiss, Snooze, and Open note - see reminder_popup.dart
-  /// and main.dart's _openNoteFromWidget. Deliberately not called by
-  /// Ignore, nor by merely viewing the popup/notification.
+  /// Called from Dismiss and Snooze only - see reminder_popup.dart.
+  /// Deliberately not called by Open note or Ignore, nor by merely viewing
+  /// the popup/notification.
   Future<void> markReminderResolved(String noteId) async {
     final prefs = await SharedPreferences.getInstance();
     final resolved = prefs.getStringList(_resolvedReminderIdsPrefsKey) ?? [];
@@ -362,24 +419,159 @@ class NotificationService {
     }
   }
 
-  /// Re-posts any overdue reminder the user hasn't resolved yet (Dismiss,
-  /// Snooze, or Open note) - covers both "never delivered at all" and "was
-  /// delivered but is still sitting unacknowledged," which look identical
-  /// from here (resolved=false either way). Intended to be called exactly
-  /// once, at genuine app process startup (see main.dart) - unlike
+  /// Overridable by tests to stand in for the plugin's real
+  /// getActiveNotifications() (which throws with no platform implementation
+  /// registered under flutter_test) - same reasoning as debugOnCancel/
+  /// debugOnShow. Returns the set of notification ids currently in the tray.
+  Future<Set<int>> Function()? debugActiveNotificationIds;
+
+  /// The notification ids currently showing in the system tray. Used by
+  /// [restoreUnresolvedReminders] to avoid re-posting (and thus re-alerting)
+  /// a reminder that's already visible. On any failure, returns an empty
+  /// set so restore falls back to its old always-repost behavior - better a
+  /// possible duplicate alert than a reminder that silently never reappears.
+  Future<Set<int>> _activeNotificationIds() async {
+    if (debugActiveNotificationIds != null) {
+      return debugActiveNotificationIds!();
+    }
+    try {
+      final active = await _plugin.getActiveNotifications();
+      return {
+        for (final n in active)
+          if (n.id != null) n.id!,
+      };
+    } catch (_) {
+      return <int>{};
+    }
+  }
+
+  /// Re-posts any overdue reminder the user hasn't resolved yet (Dismiss or
+  /// Snooze) - covers both "never delivered at all" and "was delivered but
+  /// is still sitting unacknowledged," which look identical from here
+  /// (resolved=false either way). Intended to be called exactly once, at
+  /// genuine app process startup (see main.dart) - unlike
   /// showOverdueIfNotAlready/rescheduleAll, which run on every sync
   /// reconnect and every push and must not re-alert on every one of those
   /// for a reminder the user simply hasn't gotten to yet.
   Future<void> restoreUnresolvedReminders() async {
     if (kIsWeb) return;
     final overdue = await DbService.instance.withOverdueReminders();
+    if (overdue.isEmpty) return;
+    // Skip anything already in the tray, so a normal app-open (where the
+    // reminder is still showing) doesn't re-post and thus re-alert
+    // (sound/vibrate/full-screen) something the user can already see.
+    // After a reboot the tray is wiped, so this set is empty and the
+    // reminders genuinely get re-posted - which is the whole point of
+    // this method.
+    final activeIds = await _activeNotificationIds();
     for (final note in overdue) {
       try {
-        if (await _reminderResolved(note.id)) continue;
+        if (await isReminderResolved(note.id)) continue;
+        if (activeIds.contains(note.notificationId)) continue;
         await _showNow(note);
       } catch (_) {
         // Same reasoning as rescheduleAll's per-note isolation above.
       }
     }
+  }
+}
+
+/// Handles a tap on Dismiss/Snooze directly on a fired reminder's
+/// notification, entirely in the background - no app UI ever shows (see
+/// the `actions` list in _reminderNotificationDetails and this function's
+/// registration as onDidReceiveBackgroundNotificationResponse in
+/// NotificationService.initialize). The plugin invokes this in its own
+/// isolate, separate from - and not sharing state/singletons with - any
+/// already-running main app isolate, so this re-initializes what it needs
+/// itself, the same idea as main.dart's --boot-restore entrypoint.
+///
+/// Both actions explicitly cancel the tray notification via
+/// NotificationService.cancel - the same call reminder_popup.dart's own
+/// in-app Dismiss/Snooze make - rather than relying solely on the
+/// `cancelNotification: true` already set on both AndroidNotificationActions
+/// in _reminderNotificationDetails; that flag alone wasn't reliably
+/// clearing the tray entry on-device. Both actions therefore need one DB
+/// *read* to look up the note's notificationId (a stable hash of its id -
+/// see Note.notificationId), which carries none of the cross-isolate risk
+/// below (that only applies to concurrent writers).
+///
+/// Dismiss otherwise only touches SharedPreferences (markReminderResolved) -
+/// deliberately not writing to the local notes DB, which has no
+/// cross-isolate/cross-process file locking (checked directly - sembast has
+/// none), so a concurrent write from here while the main app might also
+/// have the DB open is a real if narrow risk. Snooze does need one DB write
+/// (the note's new reminderAt) - that risk is accepted there since there's
+/// no way to snooze without persisting a new time somewhere. The snooze
+/// duration itself comes from SnoozeSettings (plain SharedPreferences, not
+/// Riverpod - this isolate has no ProviderScope to read from).
+@pragma('vm:entry-point')
+Future<void> handleBackgroundReminderAction(
+  NotificationResponse response,
+) async {
+  final noteId = response.payload;
+  final actionId = response.actionId;
+  if (noteId == null || actionId == null) return;
+
+  WidgetsFlutterBinding.ensureInitialized();
+
+  try {
+    // Needed for schedule()'s real zonedSchedule call below to work
+    // correctly on a real device, since this fresh isolate hasn't set up
+    // the plugin's native side yet. Caught separately from the rest of
+    // this function's logic: this throws under flutter_test (no platform
+    // implementation registered there), but the rest of this function
+    // stays directly unit-testable regardless, via the debug hooks
+    // markReminderResolved/schedule/DbService already have.
+    //
+    // requestPermissions: false is required, not optional - see
+    // initialize()'s own doc comment for why requesting permissions here
+    // hangs this call forever on a real device instead of throwing.
+    await NotificationService.instance.initialize(requestPermissions: false);
+  } catch (_) {}
+
+  try {
+    final note = await DbService.instance.getById(noteId);
+
+    if (actionId == _dismissActionId) {
+      if (note != null) {
+        // Failure here must not skip markReminderResolved below - same
+        // reasoning as reminder_popup.dart's own Dismiss handler.
+        try {
+          await NotificationService.instance.cancel(note.notificationId);
+        } catch (_) {}
+      }
+      await NotificationService.instance.markReminderResolved(noteId);
+      return;
+    }
+    if (actionId != _snoozeActionId) return;
+    if (note == null) return; // deleted since the reminder fired
+
+    // Failure here must not skip the reschedule below - same reasoning as
+    // the Dismiss branch above.
+    try {
+      await NotificationService.instance.cancel(note.notificationId);
+    } catch (_) {}
+
+    final newReminderAt = await SnoozeSettings.instance.resolveNext();
+
+    final updated = note.copyWith(
+      reminderAt: newReminderAt,
+      updated: DateTime.now(),
+    );
+    await DbService.instance.upsert(updated);
+    await NotificationService.instance.schedule(updated);
+
+    // Awaited, not fire-and-forget like NotesNotifier.addOrUpdate's own
+    // sync call - this isolate has no guaranteed lingering time after this
+    // function returns, unlike the main app isolate, which keeps running
+    // regardless of an ignored Future.
+    try {
+      await PbService.instance.restore();
+      await PbService.instance.upsert(updated);
+    } catch (_) {
+      // Best-effort - the local DB write above already succeeded.
+    }
+  } catch (_) {
+    // Nothing more useful to do from a background isolate with no UI.
   }
 }

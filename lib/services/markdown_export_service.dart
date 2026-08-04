@@ -7,9 +7,11 @@ import '../models/note.dart';
 
 /// Formats notes as standalone Markdown files. Since note bodies already
 /// use GitHub-Flavored-Markdown checklist syntax (see
-/// note_body_editor.dart), this is just a title heading followed by the
-/// body as-is - the inverse of MarkdownImportService, no conversion
-/// needed either direction.
+/// note_body_editor.dart), this is just a title heading, an optional
+/// "Reminder: `<ISO8601>`" line (jotes' own convention - not a standard
+/// Markdown construct, but there isn't one for this), and the body as-is -
+/// the inverse of MarkdownImportService, no conversion needed either
+/// direction.
 class MarkdownExportService {
   static final MarkdownExportService instance = MarkdownExportService._();
 
@@ -18,9 +20,17 @@ class MarkdownExportService {
   String toMarkdown(Note note) {
     final title = note.title.trim();
     final body = note.body.trim();
-    if (title.isEmpty) return body;
-    if (body.isEmpty) return '# $title';
-    return '# $title\n\n$body';
+    // UTC, matching the convention already used for reminder_at
+    // everywhere else it's serialized as text - see Note.toPocketBase.
+    final reminderLine = note.reminderAt != null
+        ? 'Reminder: ${note.reminderAt!.toUtc().toIso8601String()}'
+        : null;
+
+    final header = [if (title.isNotEmpty) '# $title', ?reminderLine].join('\n');
+
+    if (header.isEmpty) return body;
+    if (body.isEmpty) return header;
+    return '$header\n\n$body';
   }
 
   /// A filesystem-safe filename (no extension) derived from the note's

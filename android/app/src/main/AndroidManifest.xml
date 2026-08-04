@@ -56,6 +56,15 @@
         <receiver
             android:exported="false"
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <!-- Required by the plugin for notification actions (Dismiss/Snooze
+             on a fired reminder - see handleBackgroundReminderAction in
+             notification_service.dart) to actually reach the app; without
+             this, tapping an action silently does nothing at all, since
+             Android drops a broadcast Intent aimed at an undeclared
+             receiver. -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver" />
         <receiver
             android:exported="false"
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
@@ -87,6 +96,16 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/reminder_list_widget_info" />
+        </receiver>
+        <receiver
+            android:name=".BootRestoreReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
         </receiver>
     </application>
     <queries>

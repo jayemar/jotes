@@ -6,11 +6,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../build_info.dart';
 import '../models/note.dart';
 import '../providers/app_info_provider.dart';
 import '../providers/notes_provider.dart';
 import '../providers/sync_provider.dart';
+import '../services/autostart_service.dart';
 import '../services/keep_import_service.dart';
 import '../services/markdown_export_service.dart';
 import '../services/markdown_import_service.dart';
@@ -47,6 +49,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     // when the user next tries to set one (note_editor_screen.dart).
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _checkNotificationsEnabled(),
+    );
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _checkAutostartSettings(),
     );
 
     // NoteCard's reminder chip switches from green (upcoming) to red (past)
@@ -89,6 +94,53 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
           TextButton(
             onPressed: () =>
                 ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
+            child: const Text('Dismiss'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static const _autostartBannerDismissedPrefsKey = 'autostart_banner_dismissed';
+
+  /// Unlike _checkNotificationsEnabled, there's no API to detect whether
+  /// autostart is actually blocking this app - only whether this device's
+  /// manufacturer has that concept at all (see AutostartService) - so
+  /// re-showing this on every launch regardless of what the user already
+  /// did about it would just be nagging. Shown once per install unless
+  /// dismissed.
+  Future<void> _checkAutostartSettings() async {
+    final isRestrictive = await AutostartService.instance
+        .isKnownRestrictiveManufacturer();
+    if (!isRestrictive) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_autostartBannerDismissedPrefsKey) ?? false) return;
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showMaterialBanner(
+      MaterialBanner(
+        content: const Text(
+          'Your device may block reminders from firing in the background '
+          'unless jotes is allowed to auto-start.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await AutostartService.instance.openAutostartSettings();
+              await prefs.setBool(_autostartBannerDismissedPrefsKey, true);
+              if (mounted) {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              }
+            },
+            child: const Text('Open settings'),
+          ),
+          TextButton(
+            onPressed: () async {
+              await prefs.setBool(_autostartBannerDismissedPrefsKey, true);
+              if (mounted) {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              }
+            },
             child: const Text('Dismiss'),
           ),
         ],
@@ -175,7 +227,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     // Watched here (not just from the drawer) so restoring a saved sync
     // session and starting the realtime subscription happens as soon as
     // the app launches, not only once the drawer is opened.
-    ref.watch(syncProvider);
+    final syncState = ref.watch(syncProvider);
 
     return PopScope(
       canPop: !_selectionMode,
@@ -183,7 +235,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
         if (didPop) return;
         _clearSelection();
       },
-      child: _buildScaffold(context, notesAsync, notes),
+      child: _buildScaffold(context, notesAsync, notes, syncState),
     );
   }
 
@@ -191,6 +243,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     BuildContext context,
     AsyncValue<List<Note>> notesAsync,
     List<Note> notes,
+    SyncState syncState,
   ) {
     final colorScheme = Theme.of(context).colorScheme;
     final iconColor = colorScheme.onSurfaceVariant;
@@ -290,6 +343,25 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                           setState(() => _searchQuery = '');
                         },
                       ),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 16),
+                      child: Tooltip(
+                        message: syncState.status == SyncStatus.connected
+                            ? 'Sync connected'
+                            : 'Sync not connected',
+                        child: Container(
+                          key: const Key('sync_indicator'),
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: syncState.status == SyncStatus.connected
+                                ? Colors.green
+                                : Colors.red,
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
           ),
           notesAsync.when(

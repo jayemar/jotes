@@ -77,21 +77,23 @@ class ReminderListWidget : GlanceAppWidget() {
         modifier = GlanceModifier
             .fillMaxSize()
             .background(widgetBackgroundProvider)
-            .padding(8.dp),
+            // More on the left specifically, matching SingleNoteWidget -
+            // content was sitting right up against the widget's left edge.
+            .padding(start = 20.dp, top = 14.dp, end = 14.dp, bottom = 14.dp),
     ) {
       Text(
           text = "Reminders",
           style = TextStyle(
               color = noteTextColorProvider,
               fontWeight = FontWeight.Bold,
-              fontSize = 14.sp,
+              fontSize = 18.sp,
           ),
-          modifier = GlanceModifier.padding(bottom = 4.dp),
+          modifier = GlanceModifier.padding(bottom = 12.dp),
       )
       if (entries.isEmpty()) {
         Text(
             text = "No scheduled reminders",
-            style = TextStyle(color = noteTextColorProvider, fontSize = 13.sp),
+            style = TextStyle(color = noteTextColorProvider, fontSize = 16.sp),
         )
       } else {
         LazyColumn {
@@ -99,7 +101,7 @@ class ReminderListWidget : GlanceAppWidget() {
             Column(
                 modifier = GlanceModifier
                     .fillMaxWidth()
-                    .padding(vertical = 6.dp)
+                    .padding(vertical = 8.dp)
                     .clickable(
                         actionStartActivity<MainActivity>(
                             context,
@@ -110,13 +112,13 @@ class ReminderListWidget : GlanceAppWidget() {
               Text(
                   text = entry.title.ifEmpty { "(untitled)" },
                   maxLines = 1,
-                  style = TextStyle(color = noteTextColorProvider, fontSize = 14.sp),
+                  style = TextStyle(color = noteTextColorProvider, fontSize = 16.sp),
               )
               Text(
                   text = timeFormat.format(Date(entry.reminderAtMillis)),
                   maxLines = 1,
                   style = TextStyle(
-                      fontSize = 12.sp,
+                      fontSize = 14.sp,
                       color = if (entry.isOverdue) overdueColorProvider else upcomingColorProvider,
                   ),
               )

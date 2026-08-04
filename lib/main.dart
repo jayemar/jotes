@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart'
-    show LicenseEntryWithLineBreaks, LicenseRegistry;
+    show LicenseEntryWithLineBreaks, LicenseRegistry, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,12 +21,32 @@ import 'widgets/reminder_popup.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
+/// Extracts the note id from a `jotes://note/{id}` widget-tap URI (see
+/// SingleNoteWidget.kt/ReminderListWidget.kt), or null if [uri] doesn't
+/// match that shape. Pulled out of _openNoteFromWidget as a pure function
+/// so this parsing is independently testable - for this URI shape, "note"
+/// is the *host* (authority), not a path segment; pathSegments is just
+/// `["{id}"]`. Get this wrong (as an earlier version did, checking
+/// pathSegments[0]/[1]) and every widget tap silently no-ops.
+@visibleForTesting
+String? noteIdFromWidgetUri(Uri? uri) {
+  if (uri == null || uri.host != 'note' || uri.pathSegments.isEmpty) {
+    return null;
+  }
+  return uri.pathSegments[0];
+}
+
 /// UnifiedPush can start the app headlessly (no UI) purely to hand a
 /// background push to [UnifiedPushService], passing `--unifiedpush-bg` in
 /// [args] - the same entrypoint runs either way, and this flag is what
 /// decides whether to actually build a widget tree. See
 /// UnifiedPushService.initialize for why onMessage needs to be registered
 /// in both cases.
+///
+/// BootRestoreReceiver/BootRestoreService (Kotlin) start the app headlessly
+/// the same way on BOOT_COMPLETED, passing `--boot-restore` instead, so an
+/// unresolved overdue reminder reappears without the user opening the app
+/// first - see NotificationService.restoreUnresolvedReminders.
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -45,10 +65,25 @@ void main(List<String> args) async {
     }
   });
 
+  // requestPermissions: false in both headless branches below - same
+  // reasoning as handleBackgroundReminderAction in notification_service.dart:
+  // BootRestoreService/UnifiedPushService run this in a bare FlutterEngine
+  // with no Activity attached (see BootRestoreService.kt), and
+  // requestNotificationsPermission crashes native-side with no Activity to
+  // show a dialog on - not by throwing something Dart could catch, but by
+  // never sending a platform-channel result back, which hangs the awaiting
+  // call forever and silently prevents everything after it (including
+  // restoreUnresolvedReminders itself) from ever running.
+  if (args.contains('--boot-restore')) {
+    await NotificationService.instance.initialize(requestPermissions: false);
+    await NotificationService.instance.restoreUnresolvedReminders();
+    return;
+  }
+
   await UnifiedPushService.instance.initialize();
 
   if (args.contains('--unifiedpush-bg')) {
-    await NotificationService.instance.initialize();
+    await NotificationService.instance.initialize(requestPermissions: false);
     await PbService.instance.restore();
     return;
   }
@@ -133,22 +168,14 @@ class _JotesAppState extends ConsumerState<JotesApp> {
   /// (see HomeWidgetIntent.kt on the Kotlin side). Unlike a fired reminder
   /// notification (_openNoteById, which shows the snooze/dismiss popup), a
   /// widget tap just means "I want to look at this note" - so this goes
-  /// straight to the editor instead.
+  /// straight to the editor instead. Deliberately does not touch the tray
+  /// notification or mark the reminder resolved - same reasoning as "Open
+  /// note" in showReminderPopup.
   Future<void> _openNoteFromWidget(Uri? uri) async {
-    if (uri == null || uri.pathSegments.length < 2) return;
-    if (uri.pathSegments[0] != 'note') return;
-    final note = await DbService.instance.getById(uri.pathSegments[1]);
+    final noteId = noteIdFromWidgetUri(uri);
+    if (noteId == null) return;
+    final note = await DbService.instance.getById(noteId);
     if (note == null) return; // note may have since been deleted
-    // Viewing the note this way resolves its reminder the same way "Open
-    // note" in the popup does - see showReminderPopup's own Open note
-    // handler for the same reasoning.
-    try {
-      await NotificationService.instance.cancel(note.notificationId);
-    } catch (_) {
-      // Not fatal - see addOrUpdate in notes_provider.dart for the same
-      // reasoning.
-    }
-    await NotificationService.instance.markReminderResolved(note.id);
     final navState = navigatorKey.currentState;
     if (navState == null) return;
     navState.push(

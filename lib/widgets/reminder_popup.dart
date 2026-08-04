@@ -30,20 +30,12 @@ Future<void> showReminderPopup(BuildContext context, WidgetRef ref, Note note) {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             FilledButton(
-              onPressed: () async {
+              onPressed: () {
+                // Deliberately does not cancel the tray notification or
+                // mark the reminder resolved - opening a note to look at
+                // it isn't the same as deciding you're done with its
+                // reminder. Only Dismiss/Snooze do that.
                 Navigator.pop(dialogContext);
-                // Not fatal - see addOrUpdate in notes_provider.dart for
-                // the same reasoning; opening the note must still work
-                // even if the tray notification fails to cancel.
-                try {
-                  await NotificationService.instance.cancel(
-                    note.notificationId,
-                  );
-                } catch (_) {}
-                await NotificationService.instance.markReminderResolved(
-                  note.id,
-                );
-                if (!context.mounted) return;
                 Navigator.push(
                   context,
                   MaterialPageRoute(
