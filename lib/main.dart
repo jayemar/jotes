@@ -15,6 +15,7 @@ import 'screens/widget_note_picker_screen.dart';
 import 'services/db_service.dart';
 import 'services/notification_service.dart';
 import 'services/pb_service.dart';
+import 'services/share_intent_service.dart';
 import 'services/unifiedpush_service.dart';
 import 'theme/app_text_styles.dart';
 import 'widgets/reminder_popup.dart';
@@ -89,6 +90,7 @@ void main(List<String> args) async {
   }
 
   await NotificationService.instance.initialize();
+  ShareIntentService.instance.initialize();
   // Once per genuine app launch, not from the headless push path above (no
   // reason to re-alert the user from a background pocket-buzz wake) and not
   // from sync's own reconnect/push-driven mergeSync (which would otherwise
@@ -127,6 +129,7 @@ class JotesApp extends ConsumerStatefulWidget {
 class _JotesAppState extends ConsumerState<JotesApp> {
   StreamSubscription<String>? _tapSubscription;
   StreamSubscription<Uri?>? _widgetClickSubscription;
+  StreamSubscription<SharedContent>? _shareSubscription;
 
   @override
   void initState() {
@@ -137,11 +140,17 @@ class _JotesAppState extends ConsumerState<JotesApp> {
     _widgetClickSubscription = HomeWidget.widgetClicked.listen(
       _openNoteFromWidget,
     );
+    _shareSubscription = ShareIntentService.instance.onSharedText.listen(
+      _openNoteFromShare,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final launchNoteId = await NotificationService.instance.getLaunchNoteId();
       if (launchNoteId != null) _openNoteById(launchNoteId);
       final widgetUri = await HomeWidget.initiallyLaunchedFromHomeWidget();
       if (widgetUri != null) _openNoteFromWidget(widgetUri);
+      final sharedContent = await ShareIntentService.instance
+          .getInitialSharedText();
+      if (sharedContent != null) _openNoteFromShare(sharedContent);
     });
   }
 
@@ -149,6 +158,7 @@ class _JotesAppState extends ConsumerState<JotesApp> {
   void dispose() {
     _tapSubscription?.cancel();
     _widgetClickSubscription?.cancel();
+    _shareSubscription?.cancel();
     super.dispose();
   }
 
@@ -180,6 +190,26 @@ class _JotesAppState extends ConsumerState<JotesApp> {
     if (navState == null) return;
     navState.push(
       MaterialPageRoute(builder: (_) => NoteEditorScreen(existing: note)),
+    );
+  }
+
+  /// Another app shared text into jotes (e.g. a mobile browser's "Share"
+  /// action - see the ACTION_SEND intent-filter in AndroidManifest.xml and
+  /// ShareIntentService). Opens a brand-new, not-yet-saved note pre-filled
+  /// with it - lands in the editor so the user can review/edit before it's
+  /// actually kept, rather than silently creating a note behind their
+  /// back, matching how most other share targets (e.g. Google Keep)
+  /// behave.
+  void _openNoteFromShare(SharedContent shared) {
+    final navState = navigatorKey.currentState;
+    if (navState == null) return;
+    navState.push(
+      MaterialPageRoute(
+        builder: (_) => NoteEditorScreen(
+          initialTitle: shared.subject,
+          initialBody: shared.text,
+        ),
+      ),
     );
   }
 

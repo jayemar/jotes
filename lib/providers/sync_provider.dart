@@ -86,6 +86,23 @@ class SyncNotifier extends Notifier<SyncState> {
     state = SyncState.initial;
   }
 
+  /// Manually re-runs the same reconciliation _startSync already does on
+  /// every connect/reconnect - e.g. a "Sync now" button in the UI. A
+  /// realtime subscription only delivers while this device's app is
+  /// actively open, and the background-push fallback (see
+  /// UnifiedPushService) depends on a distributor being installed and
+  /// registration having succeeded, which is best-effort and silently
+  /// skipped if not - so a change made on another device (most notably a
+  /// delete, since a missed one leaves a note lingering rather than just
+  /// stale) can otherwise sit unseen indefinitely on a device that hasn't
+  /// happened to reconnect since. This lets a stuck device force-pull the
+  /// latest state without a full disconnect/reconnect.
+  Future<void> resync() async {
+    if (state.status != SyncStatus.connected) return;
+    await mergeSync();
+    ref.invalidate(notesProvider);
+  }
+
   Future<void> _startSync() async {
     await mergeSync();
     ref.invalidate(notesProvider);

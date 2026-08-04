@@ -16,6 +16,7 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
   final _passwordCtrl = TextEditingController();
   bool _register = false;
   bool _obscurePassword = true;
+  bool _resyncing = false;
 
   @override
   void dispose() {
@@ -47,6 +48,23 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
     TextInput.finishAutofillContext();
   }
 
+  /// Forces a full reconciliation right now (see SyncNotifier.resync) -
+  /// mainly useful when another device's change (a delete especially)
+  /// hasn't shown up here yet, e.g. because this device has no working
+  /// background push and simply hasn't reconnected since.
+  Future<void> _resync() async {
+    setState(() => _resyncing = true);
+    try {
+      await ref.read(syncProvider.notifier).resync();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Synced')));
+    } finally {
+      if (mounted) setState(() => _resyncing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final syncState = ref.watch(syncProvider);
@@ -72,17 +90,39 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
       children: [
         const Icon(Icons.cloud_done, size: 48, color: Colors.green),
         const SizedBox(height: 16),
-        Text(
-          'Connected to ${state.serverUrl}',
-          style: const TextStyle(fontWeight: FontWeight.w600),
+        const Text(
+          'Connected to:',
+          style: TextStyle(fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 4),
+        Text('${state.serverUrl}'),
+        const SizedBox(height: 12),
         Text('Signed in as ${state.userEmail}'),
         const SizedBox(height: 24),
-        FilledButton.tonal(
-          key: const Key('sync_disconnect_button'),
-          onPressed: () => ref.read(syncProvider.notifier).disconnect(),
-          child: const Text('Disconnect'),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonal(
+                key: const Key('sync_now_button'),
+                onPressed: _resyncing ? null : _resync,
+                child: _resyncing
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Sync now'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton.tonal(
+                key: const Key('sync_disconnect_button'),
+                onPressed: () => ref.read(syncProvider.notifier).disconnect(),
+                child: const Text('Disconnect'),
+              ),
+            ),
+          ],
         ),
       ],
     );

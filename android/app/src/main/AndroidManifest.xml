@@ -31,6 +31,16 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Makes jotes appear as a share target (e.g. "Share" from a
+                 browser's page menu) - handled in MainActivity.kt/
+                 ShareIntentService (Dart), which turns the shared text into
+                 a new, not-yet-saved note. Text only - jotes notes are
+                 plain markdown, with nowhere to put a shared image/file. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
         <activity
             android:name=".WidgetConfigurationActivity"

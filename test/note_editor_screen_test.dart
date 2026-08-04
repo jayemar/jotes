@@ -407,27 +407,30 @@ void _mainWidgetTests() {
     expect(find.text('Export as Markdown'), findsOneWidget);
   });
 
-  testWidgets('the three-dot menu also offers Share, Copy, and Delete for an '
-      'existing note', (tester) async {
-    final note = _existingNote(body: 'plain text');
-    await tester.pumpWidget(
-      ProviderScope(
-        child: MaterialApp(home: NoteEditorScreen(existing: note)),
-      ),
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    'the three-dot menu also offers Share, Duplicate, and Delete for an '
+    'existing note',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('note_more_menu')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Share'), findsOneWidget);
-    expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Delete'), findsOneWidget);
-  });
+      expect(find.text('Share'), findsOneWidget);
+      expect(find.text('Duplicate'), findsOneWidget);
+      expect(find.text('Delete'), findsOneWidget);
+    },
+  );
 
   testWidgets(
-    'Copy and Delete are not offered for a brand-new, never-saved note - '
-    "there's nothing persisted yet to duplicate or remove",
+    'Duplicate and Delete are not offered for a brand-new, never-saved '
+    "note - there's nothing persisted yet to duplicate or remove",
     (tester) async {
       await tester.pumpWidget(
         const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
@@ -438,14 +441,15 @@ void _mainWidgetTests() {
       await tester.pumpAndSettle();
 
       expect(find.text('Share'), findsOneWidget);
-      expect(find.text('Copy'), findsNothing);
+      expect(find.text('Duplicate'), findsNothing);
       expect(find.text('Delete'), findsNothing);
     },
   );
 
   testWidgets(
-    'choosing Copy from the menu saves a duplicate with a fresh id and no '
-    'reminder, and stays on the original note',
+    'choosing Duplicate from the menu prompts for a title (pre-filled with '
+    "the original note's own title), then saves a duplicate with a fresh "
+    'id and no reminder, staying on the original note',
     (tester) async {
       final note = _existingNote(
         body: 'plain text',
@@ -465,7 +469,21 @@ void _mainWidgetTests() {
 
       await tester.tap(find.byKey(const Key('note_more_menu')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Copy'));
+      await tester.tap(find.text('Duplicate'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, isEmpty); // not saved until the title's confirmed
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('duplicate_note_title_field')),
+            )
+            .controller!
+            .text,
+        note.title,
+      );
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Duplicate'));
       await tester.pumpAndSettle();
 
       expect(notifier.saved, hasLength(1));
@@ -474,10 +492,74 @@ void _mainWidgetTests() {
       expect(copy.title, note.title);
       expect(copy.body, note.body);
       expect(copy.reminderAt, isNull);
-      expect(find.text('Note copied'), findsOneWidget);
+      expect(find.text('Note duplicated'), findsOneWidget);
 
       // Still on the original note, not navigated away.
       expect(find.byTooltip('Reminder options'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'editing the pre-filled title before confirming Duplicate uses the '
+    'edited title, not the original',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Duplicate'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('duplicate_note_title_field')),
+        'A distinct duplicate title',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Duplicate'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved.single.title, 'A distinct duplicate title');
+    },
+  );
+
+  testWidgets(
+    'cancelling the Duplicate title dialog does not create a duplicate',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Duplicate'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, isEmpty);
+      expect(find.byKey(const Key('duplicate_note_title_field')), findsNothing);
     },
   );
 
@@ -794,5 +876,87 @@ void _mainWidgetTests() {
         'Saved by me',
       );
     });
+  });
+
+  group('pre-filled from a share (see ShareIntentService)', () {
+    testWidgets('the title and body fields are pre-filled from initialTitle/'
+        'initialBody', (tester) async {
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(
+            home: NoteEditorScreen(
+              initialTitle: 'Shared title',
+              initialBody: 'Shared body text',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('title_field')))
+            .controller!
+            .text,
+        'Shared title',
+      );
+      expect(find.text('Shared body text'), findsOneWidget);
+    });
+
+    testWidgets(
+      'a note pre-filled with shared text saves itself immediately, not '
+      'deferred until the screen is popped - a share the user never even '
+      'got a chance to reject must not be silently discarded if the app '
+      'is left via the home button/task switcher instead of back',
+      (tester) async {
+        final notifier = _RecordingNotesNotifier();
+        final container = ProviderContainer(
+          overrides: [notesProvider.overrideWith(() => notifier)],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const MaterialApp(
+              home: NoteEditorScreen(initialBody: 'Shared body text'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(notifier.saved, hasLength(1));
+        expect(notifier.saved.single.body, 'Shared body text');
+      },
+    );
+
+    testWidgets(
+      'initialTitle/initialBody are ignored for an existing note - only a '
+      'brand-new note can be pre-filled from a share',
+      (tester) async {
+        final note = _existingNote(body: 'existing body');
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: NoteEditorScreen(
+                existing: note,
+                initialTitle: 'should be ignored',
+                initialBody: 'should also be ignored',
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('title_field')))
+              .controller!
+              .text,
+          note.title,
+        );
+        expect(find.text('existing body'), findsOneWidget);
+        expect(find.text('should be ignored'), findsNothing);
+      },
+    );
   });
 }

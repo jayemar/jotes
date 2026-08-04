@@ -258,129 +258,144 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
       key: _scaffoldKey,
       backgroundColor: colorScheme.surfaceContainerLow,
       drawer: _buildDrawer(context, notes),
-      body: CustomScrollView(
-        slivers: [
-          const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          SliverAppBar(
-            floating: true,
-            snap: true,
-            backgroundColor: colorScheme.surfaceContainerHigh,
-            surfaceTintColor: Colors.transparent,
-            elevation: 1,
-            shadowColor: colorScheme.shadow,
-            leading: _selectionMode
-                ? IconButton(
-                    icon: Icon(Icons.close, color: iconColor),
-                    tooltip: 'Cancel selection',
-                    onPressed: _clearSelection,
-                  )
-                : IconButton(
-                    icon: Icon(Icons.menu, color: iconColor),
-                    tooltip: 'Menu',
-                    onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                  ),
-            title: _selectionMode
-                ? Text(
-                    '${_selectedIds.length} selected',
-                    style: TextStyle(
-                      color: iconColor,
-                      fontWeight: FontWeight.w400,
-                      fontSize: 22,
+      body: RefreshIndicator(
+        key: const Key('notes_refresh_indicator'),
+        // Same reconciliation as the "Sync now" button in Sync settings -
+        // a pull-down gesture is the more discoverable, mobile-browser-
+        // style way to ask for the same thing, without leaving this
+        // screen. A no-op (but still a valid, harmless refresh gesture)
+        // while not connected - see SyncNotifier.resync.
+        onRefresh: () => ref.read(syncProvider.notifier).resync(),
+        child: CustomScrollView(
+          // Without this, a note list short enough to not fill the
+          // viewport has nothing to overscroll, and the pull gesture
+          // never registers at all - RefreshIndicator needs the
+          // scrollable to always be scrollable, not just when its content
+          // happens to overflow.
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            SliverAppBar(
+              floating: true,
+              snap: true,
+              backgroundColor: colorScheme.surfaceContainerHigh,
+              surfaceTintColor: Colors.transparent,
+              elevation: 1,
+              shadowColor: colorScheme.shadow,
+              leading: _selectionMode
+                  ? IconButton(
+                      icon: Icon(Icons.close, color: iconColor),
+                      tooltip: 'Cancel selection',
+                      onPressed: _clearSelection,
+                    )
+                  : IconButton(
+                      icon: Icon(Icons.menu, color: iconColor),
+                      tooltip: 'Menu',
+                      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
                     ),
-                  )
-                : Container(
-                    height: 42,
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: searchFieldColor,
-                      borderRadius: BorderRadius.circular(21),
-                    ),
-                    child: TextField(
-                      key: const Key('search_field'),
-                      controller: _searchCtrl,
-                      textAlignVertical: TextAlignVertical.center,
-                      decoration: InputDecoration(
-                        hintText: 'Search notes',
-                        hintStyle: TextStyle(
-                          color: searchFieldTextColor.withAlpha(140),
-                        ),
-                        border: InputBorder.none,
-                        isCollapsed: true,
-                      ),
+              title: _selectionMode
+                  ? Text(
+                      '${_selectedIds.length} selected',
                       style: TextStyle(
-                        color: searchFieldTextColor,
-                        fontSize: 16,
+                        color: iconColor,
+                        fontWeight: FontWeight.w400,
+                        fontSize: 22,
                       ),
-                      onChanged: (v) => setState(() => _searchQuery = v),
+                    )
+                  : Container(
+                      height: 42,
+                      alignment: Alignment.center,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        color: searchFieldColor,
+                        borderRadius: BorderRadius.circular(21),
+                      ),
+                      child: TextField(
+                        key: const Key('search_field'),
+                        controller: _searchCtrl,
+                        textAlignVertical: TextAlignVertical.center,
+                        decoration: InputDecoration(
+                          hintText: 'Search notes',
+                          hintStyle: TextStyle(
+                            color: searchFieldTextColor.withAlpha(140),
+                          ),
+                          border: InputBorder.none,
+                          isCollapsed: true,
+                        ),
+                        style: TextStyle(
+                          color: searchFieldTextColor,
+                          fontSize: 16,
+                        ),
+                        onChanged: (v) => setState(() => _searchQuery = v),
+                      ),
                     ),
-                  ),
-            actions: _selectionMode
-                ? [
-                    IconButton(
-                      icon: Icon(Icons.palette_outlined, color: iconColor),
-                      tooltip: 'Change color',
-                      onPressed: () => _recolorSelected(notes),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.folder_zip_outlined, color: iconColor),
-                      tooltip: 'Export as Markdown',
-                      onPressed: () => _exportSelectedToMarkdown(notes),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.delete_outline, color: iconColor),
-                      tooltip: 'Delete',
-                      onPressed: () => _deleteSelected(notes),
-                    ),
-                  ]
-                : [
-                    if (_searchQuery.isNotEmpty)
+              actions: _selectionMode
+                  ? [
                       IconButton(
-                        icon: Icon(Icons.clear, color: iconColor),
-                        tooltip: 'Clear search',
-                        onPressed: () {
-                          _searchCtrl.clear();
-                          setState(() => _searchQuery = '');
-                        },
+                        icon: Icon(Icons.palette_outlined, color: iconColor),
+                        tooltip: 'Change color',
+                        onPressed: () => _recolorSelected(notes),
                       ),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 16),
-                      child: Tooltip(
-                        message: syncState.status == SyncStatus.connected
-                            ? 'Sync connected'
-                            : 'Sync not connected',
-                        child: Container(
-                          key: const Key('sync_indicator'),
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: syncState.status == SyncStatus.connected
-                                ? Colors.green
-                                : Colors.red,
+                      IconButton(
+                        icon: Icon(Icons.folder_zip_outlined, color: iconColor),
+                        tooltip: 'Export as Markdown',
+                        onPressed: () => _exportSelectedToMarkdown(notes),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.delete_outline, color: iconColor),
+                        tooltip: 'Delete',
+                        onPressed: () => _deleteSelected(notes),
+                      ),
+                    ]
+                  : [
+                      if (_searchQuery.isNotEmpty)
+                        IconButton(
+                          icon: Icon(Icons.clear, color: iconColor),
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            _searchCtrl.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.only(right: 16),
+                        child: Tooltip(
+                          message: syncState.status == SyncStatus.connected
+                              ? 'Sync connected'
+                              : 'Sync not connected',
+                          child: Container(
+                            key: const Key('sync_indicator'),
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: syncState.status == SyncStatus.connected
+                                  ? Colors.green
+                                  : Colors.red,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-          ),
-          notesAsync.when(
-            loading: () => const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
+                    ],
             ),
-            error: (e, _) => SliverFillRemaining(
-              child: Center(child: Text('Error loading notes: $e')),
+            notesAsync.when(
+              loading: () => const SliverFillRemaining(
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => SliverFillRemaining(
+                child: Center(child: Text('Error loading notes: $e')),
+              ),
+              data: (notes) => _NoteGrid(
+                notes: _filterNotes(notes),
+                selectedIds: _selectedIds,
+                selectionMode: _selectionMode,
+                searching: _searchQuery.isNotEmpty,
+                onToggleSelection: _toggleSelection,
+                onOpen: (note) => _openNote(context, ref, note),
+              ),
             ),
-            data: (notes) => _NoteGrid(
-              notes: _filterNotes(notes),
-              selectedIds: _selectedIds,
-              selectionMode: _selectionMode,
-              searching: _searchQuery.isNotEmpty,
-              onToggleSelection: _toggleSelection,
-              onOpen: (note) => _openNote(context, ref, note),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
       floatingActionButton: _selectionMode
           ? null

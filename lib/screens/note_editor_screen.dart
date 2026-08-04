@@ -51,7 +51,20 @@ String formatTimeUntilReminder(DateTime reminderAt, {DateTime? now}) {
 class NoteEditorScreen extends ConsumerStatefulWidget {
   final Note? existing;
 
-  const NoteEditorScreen({super.key, this.existing});
+  // Pre-fills a brand-new note (only meaningful together with existing:
+  // null) - used when jotes is opened as a share target (see main.dart's
+  // _openNoteFromShare/ShareIntentService): initialBody is the shared
+  // text, initialTitle the shared subject, if the sending app provided
+  // one.
+  final String? initialTitle;
+  final String? initialBody;
+
+  const NoteEditorScreen({
+    super.key,
+    this.existing,
+    this.initialTitle,
+    this.initialBody,
+  });
 
   @override
   ConsumerState<NoteEditorScreen> createState() => _NoteEditorScreenState();
@@ -84,8 +97,10 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   void initState() {
     super.initState();
     final n = widget.existing;
-    _titleCtrl = TextEditingController(text: n?.title ?? '');
-    _currentBody = n?.body ?? '';
+    _titleCtrl = TextEditingController(
+      text: n?.title ?? widget.initialTitle ?? '',
+    );
+    _currentBody = n?.body ?? widget.initialBody ?? '';
     _colorIndex = n?.colorIndex ?? 0;
     _reminderAt = n?.reminderAt;
     _lastKnownUpdated = n?.updated;
@@ -93,6 +108,20 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     // back-button presses before the first save/pop completes) update the
     // same note instead of each minting a fresh id and creating a duplicate.
     _noteId = n?.id ?? _uuid.v4();
+
+    if (n == null &&
+        widget.initialBody != null &&
+        widget.initialBody!.isNotEmpty) {
+      // A shared-in note counts as "content to save" the moment it lands,
+      // unlike a genuinely blank new note - and, same reasoning as
+      // _pickReminder/_clearReminder's own immediate saves, this can't
+      // wait for PopScope's save-on-pop: leaving via the home button/app
+      // switcher/OS process kill never triggers it, which would otherwise
+      // silently discard a share the user never even got a chance to
+      // reject.
+      _dirty = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _save());
+    }
   }
 
   @override
@@ -410,20 +439,33 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   }
 
   /// Duplicates this note into a brand-new one with a fresh id, saved
-  /// immediately - "Make a copy", matching Keep. Stays on this (the
-  /// original) note rather than navigating to the copy, since jumping to a
-  /// different note out from under whatever the user was just looking at
-  /// would be more disorienting than useful. The reminder is deliberately
-  /// not copied - two notes silently sharing the same alert time would be
+  /// immediately once a title is confirmed - "Make a copy", matching Keep.
+  /// Asks for the new note's title first (pre-filled with this note's own
+  /// title) rather than silently reusing it verbatim, since two notes with
+  /// an identical title sitting side by side in the grid would otherwise be
+  /// hard to tell apart at a glance. Stays on this (the original) note
+  /// rather than navigating to the duplicate, since jumping to a different
+  /// note out from under whatever the user was just looking at would be
+  /// more disorienting than useful. The reminder is deliberately not
+  /// carried over - two notes silently sharing the same alert time would be
   /// confusing, and the user almost certainly wants to set a fresh one (or
-  /// none) for the copy explicitly rather than have it inherited silently.
-  Future<void> _copyNote() async {
+  /// none) for the duplicate explicitly rather than have it inherited
+  /// silently.
+  Future<void> _duplicateNote() async {
     final existing = widget.existing;
     if (existing == null) return;
+
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) =>
+          _DuplicateTitleDialog(initialTitle: existing.title),
+    );
+    if (newTitle == null || !mounted) return;
+
     final now = DateTime.now();
     final duplicate = Note(
       id: _uuid.v4(),
-      title: existing.title,
+      title: newTitle.trim(),
       body: existing.body,
       colorIndex: existing.colorIndex,
       created: now,
@@ -433,7 +475,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Note copied')));
+    ).showSnackBar(const SnackBar(content: Text('Note duplicated')));
   }
 
   /// Deletes this note after an explicit confirmation - unlike the bulk
@@ -566,7 +608,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: NoteBodyEditor(
                   key: _bodyEditorKey,
-                  initialBody: widget.existing?.body ?? '',
+                  initialBody:
+                      widget.existing?.body ?? widget.initialBody ?? '',
                   textColor: textColor,
                   hintColor: hintColor,
                   autofocusFirst: widget.existing == null,
@@ -624,8 +667,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                             _exportToMarkdown();
                           case 'share':
                             _shareNote();
-                          case 'copy':
-                            _copyNote();
+                          case 'duplicate':
+                            _duplicateNote();
                           case 'delete':
                             _deleteNote();
                         }
@@ -649,13 +692,13 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                         ),
                         // Only meaningful once there's a persisted note to
                         // duplicate/delete - a brand-new, never-saved note
-                        // has nothing to copy from or remove yet.
+                        // has nothing to duplicate or remove yet.
                         if (widget.existing != null) ...[
                           const PopupMenuItem(
-                            value: 'copy',
+                            value: 'duplicate',
                             child: ListTile(
                               leading: Icon(Icons.copy_outlined),
-                              title: Text('Copy'),
+                              title: Text('Duplicate'),
                               contentPadding: EdgeInsets.zero,
                             ),
                           ),
@@ -726,6 +769,57 @@ class _ReminderPillButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Title prompt shown by _duplicateNote. A dedicated StatefulWidget rather
+/// than a bare TextEditingController built inline in _duplicateNote - the
+/// latter was tried first and disposed the controller itself right after
+/// showDialog returned, which crashed ("used after being disposed")
+/// because the dialog route's closing animation was still rebuilding this
+/// field for a few more frames after that. Owning the controller here ties
+/// its lifecycle to this widget's own dispose(), which the framework only
+/// calls once the route is actually gone.
+class _DuplicateTitleDialog extends StatefulWidget {
+  final String initialTitle;
+
+  const _DuplicateTitleDialog({required this.initialTitle});
+
+  @override
+  State<_DuplicateTitleDialog> createState() => _DuplicateTitleDialogState();
+}
+
+class _DuplicateTitleDialogState extends State<_DuplicateTitleDialog> {
+  late final _titleCtrl = TextEditingController(text: widget.initialTitle);
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Duplicate note'),
+      content: TextField(
+        key: const Key('duplicate_note_title_field'),
+        controller: _titleCtrl,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Title'),
+        textCapitalization: TextCapitalization.sentences,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _titleCtrl.text),
+          child: const Text('Duplicate'),
+        ),
+      ],
     );
   }
 }

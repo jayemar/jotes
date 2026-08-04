@@ -11,6 +11,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 private const val AUTOSTART_CHANNEL = "com.jayemar.jotes/autostart"
+private const val SHARE_CHANNEL = "com.jayemar.jotes/share"
 
 /**
  * Component names for each OEM's own undocumented "autostart"/background
@@ -128,6 +129,8 @@ private val autostartActivitiesByManufacturer =
     )
 
 class MainActivity : FlutterActivity() {
+  private var shareChannel: MethodChannel? = null
+
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AUTOSTART_CHANNEL)
@@ -142,6 +145,42 @@ class MainActivity : FlutterActivity() {
             else -> result.notImplemented()
           }
         }
+
+    val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
+    shareChannel = channel
+    channel.setMethodCallHandler { call, result ->
+      when (call.method) {
+        // Cold start (jotes wasn't already running) - the intent that
+        // launched this Activity in the first place is the share itself.
+        // A warm start (already running) instead arrives via onNewIntent
+        // below, pushed to Dart as an "onSharedText" call on this same
+        // channel rather than something Dart has to poll for.
+        "getInitialSharedText" -> result.success(extractShare(intent))
+        else -> result.notImplemented()
+      }
+    }
+  }
+
+  // android:launchMode="singleTop" means a share arriving while jotes is
+  // already on top of the back stack reuses this same Activity instance
+  // via onNewIntent instead of a fresh onCreate - without overriding this,
+  // that share would be silently dropped (getIntent()/configureFlutterEngine
+  // only ever see the *original* launch intent).
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    val share = extractShare(intent) ?: return
+    shareChannel?.invokeMethod("onSharedText", share)
+  }
+
+  private fun extractShare(intent: Intent?): Map<String, String>? {
+    if (intent?.action != Intent.ACTION_SEND || intent.type != "text/plain") return null
+    val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return null
+    val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+    return buildMap {
+      put("text", text)
+      if (subject != null) put("subject", subject)
+    }
   }
 
   private fun matchingManufacturerKey(): String? {
