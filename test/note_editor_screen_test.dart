@@ -199,10 +199,13 @@ void _mainWidgetTests() {
       await tester.pumpAndSettle();
 
       // Confirm the date picker, then the time picker, each with their
-      // pre-filled initial value.
+      // pre-filled initial value, then the repeat picker offered as part
+      // of the same flow (see _pickReminder) - "Does not repeat" here.
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('repeat_option_none')));
       await tester.pumpAndSettle();
 
       expect(find.byType(AlertDialog), findsOneWidget);
@@ -241,6 +244,8 @@ void _mainWidgetTests() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('repeat_option_none')));
+    await tester.pumpAndSettle();
 
     // Never navigated back / popped the screen - if the save were still
     // deferred to PopScope, this would be empty.
@@ -249,6 +254,53 @@ void _mainWidgetTests() {
     expect(notifier.saved.single.body, isEmpty);
     expect(notifier.saved.single.reminderAt, isNotNull);
   });
+
+  testWidgets(
+    'the repeat picker offered as part of setting a brand-new reminder '
+    'shows "Does not repeat" checked by default, and choosing Daily saves '
+    'both reminderAt and repeatInterval together in the same save',
+    (tester) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: NoteEditorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Set reminder'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Does not repeat'), findsOneWidget);
+      expect(
+        tester
+            .widget<ListTile>(find.byKey(const Key('repeat_option_none')))
+            .trailing,
+        isNotNull,
+      );
+
+      await tester.tap(find.byKey(const Key('repeat_option_daily')));
+      await tester.pumpAndSettle();
+      // Dismiss the "Reminder set" confirmation dialog.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      // A single save carrying both fields together, not a separate one
+      // for the repeat setting.
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.reminderAt, isNotNull);
+      expect(notifier.saved.single.repeatInterval, RepeatInterval.daily);
+    },
+  );
 
   testWidgets(
     'tapping the reminder chip for an upcoming reminder offers to edit '
@@ -387,6 +439,8 @@ void _mainWidgetTests() {
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('repeat_option_none')));
       await tester.pumpAndSettle();
       // Dismiss the "Reminder set" confirmation dialog.
       await tester.tap(find.text('OK'));

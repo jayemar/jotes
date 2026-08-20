@@ -1,7 +1,14 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show AutofillHints, TextInput;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/sync_provider.dart';
+
+/// The PocketBase backend's conventional port in this project's own
+/// self-hosted deployment (see backend/'s Dockerfile/docs) - not something
+/// discoverable from the browser itself, just the fixed pairing this app's
+/// own docker-compose setup always uses alongside the web app's own port.
+const _backendPort = 8090;
 
 class SyncSettingsScreen extends ConsumerStatefulWidget {
   const SyncSettingsScreen({super.key});
@@ -17,6 +24,27 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
   bool _register = false;
   bool _obscurePassword = true;
   bool _resyncing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // On web, the browser's address bar already carries the host the user
+    // typed to reach jotes at all (the web app's own port, e.g. 8091 in
+    // this project's own deployment) - reusing that host, just swapped to
+    // the backend's own conventional port, saves retyping the same
+    // hostname/IP a second time. Native (Android) has no equivalent "how
+    // did you get here" URL to read from, so this only applies on web.
+    // Only ever runs once, into an otherwise-empty field, so it never
+    // overwrites anything the user typed.
+    if (kIsWeb) {
+      final base = Uri.base;
+      _urlCtrl.text = Uri(
+        scheme: base.scheme,
+        host: base.host,
+        port: _backendPort,
+      ).toString();
+    }
+  }
 
   @override
   void dispose() {

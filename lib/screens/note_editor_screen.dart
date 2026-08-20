@@ -247,12 +247,23 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       time.hour,
       time.minute,
     );
+
+    // Offered as part of setting/editing the reminder itself, not only
+    // afterward via the reminder chip's separate "Repeat" option - that
+    // was an easy-to-miss extra step for something that reads as part of
+    // "setting a reminder" in the first place. Dismissing this sheet
+    // (null) leaves whatever repeat setting was already there (none, for
+    // a brand-new reminder) rather than cancelling the reminder itself.
+    final repeatInterval = await _selectRepeatInterval();
+    if (!mounted) return;
+
     setState(() {
       _reminderAt = reminderAt;
       // A fresh reminder cycle - see Note.reminderResolved's own doc
       // comment for why whoever sets a new reminderAt is responsible for
       // also clearing this, rather than something downstream inferring it.
       _reminderResolved = false;
+      if (repeatInterval != null) _repeatInterval = repeatInterval;
       _dirty = true;
     });
 
@@ -429,16 +440,17 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     }
   }
 
-  /// Bottom sheet of [RepeatInterval] presets, reached via the reminder
-  /// chip's "Repeat" option above - only meaningful together with an active
-  /// [_reminderAt] (see RepeatInterval's own doc comment), so this is only
-  /// ever reachable from there. Saves immediately, same reasoning as
-  /// _pickReminder/_clearReminder's own immediate saves. Plain checkmarked
-  /// ListTiles rather than RadioListTile, whose groupValue/onChanged are
-  /// deprecated as of Flutter 3.32 in favor of a RadioGroup ancestor this
-  /// codebase has no other use for yet.
-  Future<void> _pickRepeatInterval() async {
-    final selected = await showModalBottomSheet<RepeatInterval>(
+  /// Bottom sheet of [RepeatInterval] presets - shared by [_pickReminder]
+  /// (offered as part of setting/editing a reminder's time, not just
+  /// afterward - see its own call site) and [_pickRepeatInterval] (reached
+  /// later via the reminder chip's own standalone "Repeat" option, for
+  /// changing just the repeat setting without reopening the date/time
+  /// pickers). Returns null if dismissed without choosing. Plain
+  /// checkmarked ListTiles rather than RadioListTile, whose
+  /// groupValue/onChanged are deprecated as of Flutter 3.32 in favor of a
+  /// RadioGroup ancestor this codebase has no other use for yet.
+  Future<RepeatInterval?> _selectRepeatInterval() {
+    return showModalBottomSheet<RepeatInterval>(
       context: context,
       builder: (sheetContext) => SafeArea(
         child: Column(
@@ -457,7 +469,15 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         ),
       ),
     );
+  }
 
+  /// Reached via the reminder chip's standalone "Repeat" option - only
+  /// meaningful together with an active [_reminderAt] (see RepeatInterval's
+  /// own doc comment), so this is only ever reachable from there. Saves
+  /// immediately, same reasoning as _pickReminder/_clearReminder's own
+  /// immediate saves.
+  Future<void> _pickRepeatInterval() async {
+    final selected = await _selectRepeatInterval();
     if (selected == null || !mounted) return;
     setState(() {
       _repeatInterval = selected;
