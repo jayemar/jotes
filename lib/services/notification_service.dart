@@ -7,8 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import '../models/note.dart';
+import 'background_sync_service.dart';
 import 'db_service.dart';
-import 'pb_service.dart';
 import 'snooze_settings.dart';
 
 const _channelId = 'jotes_reminders';
@@ -51,11 +51,17 @@ NotificationDetails _reminderNotificationDetails(Note note) {
       // an ordinary high-importance notification (heads-up while
       // unlocked, sound/vibration plus whatever ambient/lock-screen peek
       // the device itself offers), not take over the screen and launch
-      // the app on its own. fullScreenIntent: true used to be set here for
-      // exactly that alarm-clock-style takeover; this reverses that on
-      // explicit request. Tapping the notification still opens the
-      // reminder popup as before (see onNoteTapped/getLaunchNoteId in
-      // main.dart) - only the automatic, un-tapped takeover is gone.
+      // the app on its own. This was briefly turned back on (see git
+      // history) for the screen-off-wakes-up case Android's docs promise
+      // for this flag, then reverted again: USE_FULL_SCREEN_INTENT is a
+      // Settings-granted permission that a sideloaded (non-Play-Store)
+      // install of this app appears to lose on every update, with no
+      // fix available from app code - the OS, not jotes, decides whether
+      // a previously-granted USE_FULL_SCREEN_INTENT survives an update,
+      // so re-enabling it just means re-granting it after every future
+      // build. Tapping the notification still opens the reminder popup as
+      // before (see onNoteTapped/getLaunchNoteId in main.dart) - only the
+      // automatic, un-tapped takeover is gone.
       fullScreenIntent: false,
       // Without this, merely tapping the notification to view it (which
       // the plugin treats as the same thing as opening it) auto-cancels it
@@ -156,12 +162,11 @@ class NotificationService {
         >();
     await androidImpl?.requestNotificationsPermission();
     await androidImpl?.requestExactAlarmsPermission();
-    // Needed for the full-screen takeover in schedule() below to actually
-    // show over the lock screen on Android 14+; granted by default there
-    // for apps with alarm functionality, but requesting explicitly is
-    // still the documented, defensive thing to do (see
-    // requestFullScreenIntentPermission's own doc comment).
-    await androidImpl?.requestFullScreenIntentPermission();
+    // No requestFullScreenIntentPermission() call here - fullScreenIntent
+    // is deliberately false above, so there's nothing to request it for
+    // (and requesting it anyway would just cost a permission prompt this
+    // app can't reliably keep granted across updates - see
+    // _reminderNotificationDetails' own doc comment on fullScreenIntent).
   }
 
   /// If the app process was cold-started by tapping a reminder notification,
@@ -521,14 +526,17 @@ class NotificationService {
 /// below (that only applies to concurrent writers).
 ///
 /// Both actions now also write to the local notes DB (Dismiss to persist
-/// reminderResolved: true, Snooze the note's new reminderAt) and push that
-/// same write up via PbService, so acting on a reminder here is visible to
-/// every other device, not just this one - see Note.reminderResolved's own
-/// doc comment. sembast has no cross-isolate/cross-process file locking
-/// (checked directly), so a concurrent write from here while the main app
-/// might also have the DB open is a real if narrow risk, accepted for both
-/// actions since there's no way to record either outcome without
-/// persisting something. The snooze duration itself comes from
+/// reminderResolved: true, Snooze the note's new reminderAt) and enqueue a
+/// [BackgroundSyncService] task to push that up, so acting on a reminder
+/// here is visible to every other device, not just this one - see
+/// Note.reminderResolved's own doc comment. Enqueuing (not pushing inline,
+/// as this used to) is deliberate - see BackgroundSyncService's own doc
+/// comment for why this isolate can't be trusted to survive long enough to
+/// finish an HTTP request itself. sembast has no cross-isolate/cross-process
+/// file locking (checked directly), so a concurrent write from here while
+/// the main app might also have the DB open is a real if narrow risk,
+/// accepted for both actions since there's no way to record either outcome
+/// without persisting something. The snooze duration itself comes from
 /// SnoozeSettings (plain SharedPreferences, not Riverpod - this isolate has
 /// no ProviderScope to read from).
 @pragma('vm:entry-point')
@@ -567,16 +575,22 @@ Future<void> handleBackgroundReminderAction(
         await NotificationService.instance.cancel(note.notificationId);
       } catch (_) {}
 
-      final resolved = note.copyWith(
-        reminderResolved: true,
-        updated: DateTime.now(),
-      );
+      // noteAfterDismiss rolls reminderAt forward (leaving
+      // reminderResolved false) instead of marking this cycle resolved
+      // when the note repeats - see its own doc comment.
+      final resolved = noteAfterDismiss(note);
       await DbService.instance.upsert(resolved);
+      if (!resolved.reminderResolved) {
+        // The reminder repeats and just advanced to its next occurrence -
+        // schedule it, same as the Snooze branch below does for its own
+        // new reminderAt.
+        await NotificationService.instance.schedule(resolved);
+      }
       try {
-        await PbService.instance.restore();
-        await PbService.instance.upsert(resolved);
+        await BackgroundSyncService.instance.enqueue();
       } catch (_) {
-        // Best-effort - the local DB write above already succeeded.
+        // Best-effort - the local DB write above already succeeded, and
+        // the next foreground sync/reconnect will catch this up regardless.
       }
       return;
     }
@@ -599,15 +613,11 @@ Future<void> handleBackgroundReminderAction(
     await DbService.instance.upsert(updated);
     await NotificationService.instance.schedule(updated);
 
-    // Awaited, not fire-and-forget like NotesNotifier.addOrUpdate's own
-    // sync call - this isolate has no guaranteed lingering time after this
-    // function returns, unlike the main app isolate, which keeps running
-    // regardless of an ignored Future.
     try {
-      await PbService.instance.restore();
-      await PbService.instance.upsert(updated);
+      await BackgroundSyncService.instance.enqueue();
     } catch (_) {
-      // Best-effort - the local DB write above already succeeded.
+      // Best-effort - the local DB write above already succeeded, and
+      // the next foreground sync/reconnect will catch this up regardless.
     }
   } catch (_) {
     // Nothing more useful to do from a background isolate with no UI.

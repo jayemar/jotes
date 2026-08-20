@@ -79,6 +79,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   late String _noteId;
   DateTime? _reminderAt;
   bool _reminderResolved = false;
+  RepeatInterval _repeatInterval = RepeatInterval.none;
   bool _dirty = false;
   bool _saving = false;
 
@@ -105,6 +106,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     _colorIndex = n?.colorIndex ?? 0;
     _reminderAt = n?.reminderAt;
     _reminderResolved = n?.reminderResolved ?? false;
+    _repeatInterval = n?.repeatInterval ?? RepeatInterval.none;
     _lastKnownUpdated = n?.updated;
     // Generated once per editing session so repeated saves (e.g. multiple
     // back-button presses before the first save/pop completes) update the
@@ -146,6 +148,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       created: existing?.created ?? now,
       updated: now,
       reminderResolved: _reminderResolved,
+      repeatInterval: _repeatInterval,
     );
   }
 
@@ -205,6 +208,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       _colorIndex = remote.colorIndex;
       _reminderAt = remote.reminderAt;
       _reminderResolved = remote.reminderResolved;
+      _repeatInterval = remote.repeatInterval;
       _lastKnownUpdated = remote.updated;
     });
     _bodyEditorKey.currentState?.applyExternalBody(remote.body);
@@ -365,6 +369,9 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     setState(() {
       _reminderAt = null;
       _reminderResolved = false;
+      // Meaningless with no reminderAt to advance - see RepeatInterval's own
+      // doc comment.
+      _repeatInterval = RepeatInterval.none;
       _dirty = true;
     });
     await _save();
@@ -395,6 +402,13 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
               onTap: () => Navigator.pop(sheetContext, 'edit'),
             ),
             ListTile(
+              key: const Key('reminder_options_repeat'),
+              leading: const Icon(Icons.repeat),
+              title: const Text('Repeat'),
+              subtitle: Text(_repeatInterval.label),
+              onTap: () => Navigator.pop(sheetContext, 'repeat'),
+            ),
+            ListTile(
               leading: const Icon(Icons.alarm_off_outlined),
               title: const Text('Remove reminder'),
               onTap: () => Navigator.pop(sheetContext, 'remove'),
@@ -410,7 +424,46 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         await _pickReminder();
       case 'remove':
         await _clearReminder();
+      case 'repeat':
+        await _pickRepeatInterval();
     }
+  }
+
+  /// Bottom sheet of [RepeatInterval] presets, reached via the reminder
+  /// chip's "Repeat" option above - only meaningful together with an active
+  /// [_reminderAt] (see RepeatInterval's own doc comment), so this is only
+  /// ever reachable from there. Saves immediately, same reasoning as
+  /// _pickReminder/_clearReminder's own immediate saves. Plain checkmarked
+  /// ListTiles rather than RadioListTile, whose groupValue/onChanged are
+  /// deprecated as of Flutter 3.32 in favor of a RadioGroup ancestor this
+  /// codebase has no other use for yet.
+  Future<void> _pickRepeatInterval() async {
+    final selected = await showModalBottomSheet<RepeatInterval>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final interval in RepeatInterval.values)
+              ListTile(
+                key: Key('repeat_option_${interval.name}'),
+                title: Text(interval.label),
+                trailing: interval == _repeatInterval
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () => Navigator.pop(sheetContext, interval),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    if (selected == null || !mounted) return;
+    setState(() {
+      _repeatInterval = selected;
+      _dirty = true;
+    });
+    await _save();
   }
 
   Future<void> _pickColor() async {
@@ -447,6 +500,22 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     );
   }
 
+  /// Duplicate/Delete both need a real persisted note to act on -
+  /// widget.existing for a note this screen was opened on, or (now that
+  /// both are offered right away, not just once widget.existing != null)
+  /// an immediate save for a brand-new note that hasn't hit the ~2-second
+  /// autosave debounce yet (see _markDirty) or been saved any other way.
+  /// Returns null, meaning "nothing to act on", only for a genuinely empty
+  /// new note - same guard _save() itself already applies, so this never
+  /// persists a blank note just because the menu was opened.
+  Future<Note?> _ensurePersisted() async {
+    final existing = widget.existing;
+    if (existing != null) return existing;
+    await _save();
+    final note = _buildNote();
+    return note.isEmpty ? null : note;
+  }
+
   /// Duplicates this note into a brand-new one with a fresh id, saved
   /// immediately once a title is confirmed - "Make a copy", matching Keep.
   /// Asks for the new note's title first (pre-filled with this note's own
@@ -461,13 +530,13 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   /// none) for the duplicate explicitly rather than have it inherited
   /// silently.
   Future<void> _duplicateNote() async {
-    final existing = widget.existing;
-    if (existing == null) return;
+    final source = await _ensurePersisted();
+    if (source == null || !mounted) return;
 
     final newTitle = await showDialog<String>(
       context: context,
       builder: (dialogContext) =>
-          _DuplicateTitleDialog(initialTitle: existing.title),
+          _DuplicateTitleDialog(initialTitle: source.title),
     );
     if (newTitle == null || !mounted) return;
 
@@ -475,8 +544,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     final duplicate = Note(
       id: _uuid.v4(),
       title: newTitle.trim(),
-      body: existing.body,
-      colorIndex: existing.colorIndex,
+      body: source.body,
+      colorIndex: source.colorIndex,
       created: now,
       updated: now,
     );
@@ -495,8 +564,15 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   /// see DbService.delete, this is a real local delete, not a recoverable
   /// soft one.
   Future<void> _deleteNote() async {
-    final existing = widget.existing;
-    if (existing == null) return;
+    final source = await _ensurePersisted();
+    if (!mounted) return;
+    if (source == null) {
+      // Never persisted and still empty - nothing to delete, so this is
+      // just closing the screen, same as backing out of a blank new note
+      // normally does (see PopScope below).
+      Navigator.of(context).pop();
+      return;
+    }
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -523,7 +599,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     // reasoning as the real back-button path further down, which sets
     // this before its own nav.pop() for the same reason.
     _saving = true;
-    await ref.read(notesProvider.notifier).delete(existing);
+    await ref.read(notesProvider.notifier).delete(source);
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -751,28 +827,28 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                             contentPadding: EdgeInsets.zero,
                           ),
                         ),
-                        // Only meaningful once there's a persisted note to
-                        // duplicate/delete - a brand-new, never-saved note
-                        // has nothing to duplicate or remove yet.
-                        if (widget.existing != null) ...[
-                          const PopupMenuItem(
-                            value: 'duplicate',
-                            child: ListTile(
-                              leading: Icon(Icons.copy_outlined),
-                              title: Text('Duplicate'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
+                        // Offered right away, even for a brand-new note
+                        // that hasn't autosaved yet - _duplicateNote/
+                        // _deleteNote persist it immediately via
+                        // _ensurePersisted rather than requiring
+                        // widget.existing != null first.
+                        const PopupMenuItem(
+                          value: 'duplicate',
+                          child: ListTile(
+                            leading: Icon(Icons.copy_outlined),
+                            title: Text('Duplicate'),
+                            contentPadding: EdgeInsets.zero,
                           ),
-                          const PopupMenuDivider(),
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: ListTile(
-                              leading: Icon(Icons.delete_outline),
-                              title: Text('Delete'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
+                        ),
+                        const PopupMenuDivider(),
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: ListTile(
+                            leading: Icon(Icons.delete_outline),
+                            title: Text('Delete'),
+                            contentPadding: EdgeInsets.zero,
                           ),
-                        ],
+                        ),
                       ],
                     ),
                   ],

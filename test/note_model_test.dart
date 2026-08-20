@@ -7,6 +7,7 @@ Note _note({
   String body = '',
   DateTime? reminderAt,
   bool reminderResolved = false,
+  RepeatInterval repeatInterval = RepeatInterval.none,
 }) {
   final now = DateTime.now();
   return Note(
@@ -17,6 +18,7 @@ Note _note({
     created: now,
     updated: now,
     reminderResolved: reminderResolved,
+    repeatInterval: repeatInterval,
   );
 }
 
@@ -135,6 +137,118 @@ void main() {
 
     test('an empty note list produces an empty result', () {
       expect(notesWithActiveOrPendingReminders([], now: now), isEmpty);
+    });
+  });
+
+  group('nextOccurrence', () {
+    final from = DateTime(2026, 1, 31, 9, 30);
+
+    test('none leaves the time unchanged', () {
+      expect(nextOccurrence(from, RepeatInterval.none), from);
+    });
+
+    test('daily adds one day', () {
+      expect(
+        nextOccurrence(from, RepeatInterval.daily),
+        DateTime(2026, 2, 1, 9, 30),
+      );
+    });
+
+    test('weekly adds seven days', () {
+      expect(
+        nextOccurrence(from, RepeatInterval.weekly),
+        DateTime(2026, 2, 7, 9, 30),
+      );
+    });
+
+    test('monthly rolls Jan 31 into the following month via DateTime\'s own '
+        'normalization, not clamped to Feb\'s last day', () {
+      expect(
+        nextOccurrence(from, RepeatInterval.monthly),
+        DateTime(2026, 3, 3, 9, 30),
+      );
+    });
+
+    test('yearly adds one year, same month/day/time', () {
+      expect(
+        nextOccurrence(from, RepeatInterval.yearly),
+        DateTime(2027, 1, 31, 9, 30),
+      );
+    });
+  });
+
+  group('noteAfterDismiss', () {
+    test('a non-repeating reminder is just marked resolved, reminderAt '
+        'unchanged', () {
+      final reminderAt = DateTime(2026, 7, 20, 9);
+      final note = _note(reminderAt: reminderAt);
+
+      final result = noteAfterDismiss(note);
+
+      expect(result.reminderResolved, isTrue);
+      expect(result.reminderAt, reminderAt);
+    });
+
+    test('a repeating reminder rolls reminderAt forward and stays '
+        'unresolved for the fresh cycle', () {
+      final reminderAt = DateTime(2026, 7, 20, 9);
+      final note = _note(
+        reminderAt: reminderAt,
+        repeatInterval: RepeatInterval.daily,
+      );
+
+      final result = noteAfterDismiss(note);
+
+      expect(result.reminderResolved, isFalse);
+      expect(result.reminderAt, DateTime(2026, 7, 21, 9));
+    });
+
+    test('a repeating note with no reminderAt at all is just marked '
+        'resolved - nothing to advance', () {
+      final note = _note(repeatInterval: RepeatInterval.daily);
+
+      final result = noteAfterDismiss(note);
+
+      expect(result.reminderResolved, isTrue);
+      expect(result.reminderAt, isNull);
+    });
+  });
+
+  group('Note repeatInterval round-trips', () {
+    test('through toMap/fromMap (local storage)', () {
+      final note = _note(repeatInterval: RepeatInterval.weekly);
+
+      final restored = Note.fromMap(note.toMap());
+
+      expect(restored.repeatInterval, RepeatInterval.weekly);
+    });
+
+    test('fromMap falls back to none for a missing repeat_interval value '
+        '(a note saved before this field existed)', () {
+      final map = _note().toMap()..remove('repeat_interval');
+
+      expect(Note.fromMap(map).repeatInterval, RepeatInterval.none);
+    });
+
+    test('through toPocketBase/fromPocketBase (server sync)', () {
+      final note = _note(repeatInterval: RepeatInterval.yearly);
+
+      final restored = Note.fromPocketBase({
+        'id': note.id,
+        ...note.toPocketBase(),
+      });
+
+      expect(restored.repeatInterval, RepeatInterval.yearly);
+    });
+
+    test('fromPocketBase falls back to none for an empty repeat_interval '
+        'value (an un-migrated or untouched server record)', () {
+      final restored = Note.fromPocketBase({
+        'id': 'n1',
+        'repeat_interval': '',
+      });
+
+      expect(restored.repeatInterval, RepeatInterval.none);
     });
   });
 }

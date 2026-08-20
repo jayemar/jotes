@@ -74,7 +74,11 @@ void main() {
   _mainWidgetTests();
 }
 
-Note _existingNote({String body = 'One line', DateTime? reminderAt}) {
+Note _existingNote({
+  String body = 'One line',
+  DateTime? reminderAt,
+  RepeatInterval repeatInterval = RepeatInterval.none,
+}) {
   final now = DateTime.now();
   return Note(
     id: 'existing-1',
@@ -84,6 +88,7 @@ Note _existingNote({String body = 'One line', DateTime? reminderAt}) {
     reminderAt: reminderAt,
     created: now,
     updated: now,
+    repeatInterval: repeatInterval,
   );
 }
 
@@ -265,6 +270,47 @@ void _mainWidgetTests() {
       expect(find.text('Edit reminder'), findsOneWidget);
       expect(find.text('Reset reminder'), findsNothing);
       expect(find.text('Remove reminder'), findsOneWidget);
+      expect(find.text('Repeat'), findsOneWidget);
+      expect(find.text('Does not repeat'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'choosing Repeat from the reminder options and picking Daily saves '
+    'immediately and reflects the new choice as the subtitle next time',
+    (tester) async {
+      final note = _existingNote(
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
+      );
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.alarm));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reminder_options_repeat')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('repeat_option_daily')));
+      await tester.pumpAndSettle();
+
+      // Never navigated back / popped the screen - same "saved immediately,
+      // not deferred to PopScope" reasoning as the Remove test above.
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.repeatInterval, RepeatInterval.daily);
+
+      await tester.tap(find.byIcon(Icons.alarm));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Daily'), findsOneWidget);
     },
   );
 
@@ -510,8 +556,8 @@ void _mainWidgetTests() {
   );
 
   testWidgets(
-    'Duplicate and Delete are not offered for a brand-new, never-saved '
-    "note - there's nothing persisted yet to duplicate or remove",
+    'Duplicate and Delete are offered right away for a brand-new, '
+    'never-saved note, not just once it has been saved',
     (tester) async {
       await tester.pumpWidget(
         const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
@@ -522,8 +568,123 @@ void _mainWidgetTests() {
       await tester.pumpAndSettle();
 
       expect(find.text('Share'), findsOneWidget);
-      expect(find.text('Duplicate'), findsNothing);
-      expect(find.text('Delete'), findsNothing);
+      expect(find.text('Duplicate'), findsOneWidget);
+      expect(find.text('Delete'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'choosing Duplicate on a brand-new, never-saved note persists it '
+    'immediately (rather than requiring the autosave debounce to have '
+    'already fired) before duplicating it',
+    (tester) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: NoteEditorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('title_field')),
+        'Brand new note',
+      );
+      // Not saved yet - the autosave debounce hasn't elapsed.
+      expect(notifier.saved, isEmpty);
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Duplicate'));
+      await tester.pumpAndSettle();
+
+      // The original was persisted immediately as part of opening the
+      // Duplicate flow, before the title dialog's own save.
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.title, 'Brand new note');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Duplicate'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, hasLength(2));
+      final copy = notifier.saved.last;
+      expect(copy.id, isNot(notifier.saved.first.id));
+      expect(copy.title, 'Brand new note');
+    },
+  );
+
+  testWidgets(
+    'choosing Delete on a brand-new note that is still completely empty '
+    'just closes the screen, with no confirmation and nothing persisted - '
+    "there's nothing to delete yet",
+    (tester) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: NoteEditorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Delete note?'), findsNothing);
+      expect(notifier.saved, isEmpty);
+      expect(notifier.deleted, isEmpty);
+      expect(find.byKey(const Key('title_field')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'choosing Delete on a brand-new note that has content persists it '
+    'immediately, then deletes it after confirmation',
+    (tester) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: NoteEditorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('title_field')),
+        'Delete me',
+      );
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      // Persisted before the confirmation dialog even shows.
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.title, 'Delete me');
+      expect(find.text('Delete note?'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.deleted, hasLength(1));
+      expect(notifier.deleted.single.id, notifier.saved.single.id);
+      expect(find.byKey(const Key('title_field')), findsNothing);
     },
   );
 

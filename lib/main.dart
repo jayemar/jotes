@@ -7,16 +7,19 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:home_widget/home_widget.dart';
+import 'package:workmanager/workmanager.dart';
 import 'providers/appearance_provider.dart';
 import 'providers/theme_provider.dart';
 import 'screens/note_editor_screen.dart';
 import 'screens/notes_screen.dart';
 import 'screens/widget_note_picker_screen.dart';
+import 'services/background_sync_service.dart';
 import 'services/db_service.dart';
 import 'services/notification_service.dart';
 import 'services/pb_service.dart';
 import 'services/periodic_refresh_settings.dart';
 import 'services/share_intent_service.dart';
+import 'services/sync_engine.dart';
 import 'services/unifiedpush_service.dart';
 import 'services/widget_service.dart';
 import 'theme/app_text_styles.dart';
@@ -68,6 +71,11 @@ String? noteIdFromWidgetUri(Uri? uri) {
 /// current time, not about fetching anything new from the server; actual
 /// cross-device changes already have their own push path (see
 /// UnifiedPushService).
+///
+/// [backgroundSyncCallbackDispatcher] is a separate, WorkManager-driven
+/// headless trigger (not gated on an `args` flag, since Workmanager's own
+/// plugin - not Android's Intent system - decides when to invoke it): see
+/// BackgroundSyncService's own doc comment for what enqueues it and why.
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -118,6 +126,15 @@ void main(List<String> args) async {
 
   await NotificationService.instance.initialize();
   ShareIntentService.instance.initialize();
+  // Registers backgroundSyncCallbackDispatcher's callback handle with the
+  // native side (persisted, so this only strictly needs to happen once
+  // ever, but it's cheap and every other one-time native registration here
+  // is likewise redone on every launch rather than tracked separately) -
+  // see BackgroundSyncService's own doc comment for what this unlocks:
+  // NotificationService.handleBackgroundReminderAction enqueuing a
+  // WorkManager-backed sync instead of pushing inline from its own
+  // unreliable background isolate.
+  await Workmanager().initialize(backgroundSyncCallbackDispatcher);
   // Syncs native's WorkManager schedule to whatever the user last chose in
   // Settings (see PeriodicRefreshSettings) - a fresh install has never told
   // native anything, and an app update's native side starts with no memory
@@ -131,6 +148,29 @@ void main(List<String> args) async {
   // gotten to yet) - see restoreUnresolvedReminders' own doc comment.
   unawaited(NotificationService.instance.restoreUnresolvedReminders());
   runApp(const ProviderScope(child: JotesApp()));
+}
+
+/// Invoked by WorkManager in a fresh headless engine whenever a task
+/// enqueued via [BackgroundSyncService.enqueue] actually runs - registered
+/// once via Workmanager().initialize() above in [main]. Runs the same full
+/// reconciliation a normal app launch/reconnect already does (not a
+/// narrower single-note push): by the time this runs, whatever local write
+/// enqueued it has already landed (see BackgroundSyncService's own doc
+/// comment), and mergeSync picks up anything else locally newer than the
+/// server for the same underlying reason, not just the one change that
+/// happened to trigger this particular task.
+@pragma('vm:entry-point')
+void backgroundSyncCallbackDispatcher() {
+  Workmanager().executeTask((taskName, inputData) async {
+    if (taskName != backgroundSyncTaskName) return true;
+    try {
+      await PbService.instance.restore();
+      await mergeSync();
+      return true;
+    } catch (_) {
+      return false; // lets WorkManager retry per its backoff policy
+    }
+  });
 }
 
 /// Separate entrypoint Android launches instead of [main] when the user is

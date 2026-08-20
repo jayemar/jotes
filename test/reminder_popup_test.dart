@@ -6,14 +6,19 @@ import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/services/notification_service.dart';
 import 'package:jotes/widgets/reminder_popup.dart';
 
-Note _note() {
+Note _note({
+  DateTime? reminderAt,
+  RepeatInterval repeatInterval = RepeatInterval.none,
+}) {
   final now = DateTime.now();
   return Note(
     id: 'reminder-note-1',
     title: 'Take out the trash',
     body: 'Bins go out on Tuesday night',
+    reminderAt: reminderAt,
     created: now,
     updated: now,
+    repeatInterval: repeatInterval,
   );
 }
 
@@ -132,6 +137,31 @@ void main() {
       expect(host.recorder.saved, hasLength(1));
       expect(host.recorder.saved.single.id, note.id);
       expect(host.recorder.saved.single.reminderResolved, isTrue);
+    },
+  );
+
+  testWidgets(
+    'Dismiss on a repeating reminder rolls reminderAt forward to its next '
+    'occurrence instead of just marking it resolved',
+    (tester) async {
+      final host = await _pumpHost(tester);
+      final reminderAt = DateTime.now().add(const Duration(hours: 1));
+      final note = _note(
+        reminderAt: reminderAt,
+        repeatInterval: RepeatInterval.daily,
+      );
+
+      showReminderPopup(host.context, host.ref, note);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('reminder_popup_dismiss')));
+      await tester.pumpAndSettle();
+
+      expect(canceledIds, contains(note.notificationId));
+      expect(host.recorder.saved, hasLength(1));
+      final saved = host.recorder.saved.single;
+      expect(saved.reminderResolved, isFalse);
+      expect(saved.reminderAt, nextOccurrence(reminderAt, RepeatInterval.daily));
     },
   );
 

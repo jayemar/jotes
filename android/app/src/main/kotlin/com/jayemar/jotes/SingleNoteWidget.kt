@@ -9,9 +9,12 @@ import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalContext
+import androidx.glance.action.Action
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
+import androidx.glance.appwidget.lazy.LazyColumn
+import androidx.glance.appwidget.lazy.itemsIndexed
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.currentState
@@ -20,6 +23,7 @@ import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.width
@@ -136,6 +140,8 @@ class SingleNoteWidget : GlanceAppWidget() {
     val title = json.optString("title", "")
     val blocks = parseBlocks(json)
     val colorIndex = json.optInt("colorIndex", 0)
+    val openNote =
+        actionStartActivity<MainActivity>(context, Uri.parse("jotes://note/$id"))
 
     Column(
         modifier = GlanceModifier
@@ -144,9 +150,12 @@ class SingleNoteWidget : GlanceAppWidget() {
             // More on the left specifically - content was sitting right up
             // against the widget's left edge.
             .padding(start = 20.dp, top = 14.dp, end = 14.dp, bottom = 14.dp)
-            .clickable(
-                actionStartActivity<MainActivity>(context, Uri.parse("jotes://note/$id"))
-            ),
+            // Only reachable via the header/padding below, not through the
+            // body list - LazyColumn renders as its own scrollable
+            // ListView, which claims touches for scrolling before they
+            // ever reach an ancestor's clickable(), so each row below also
+            // carries its own copy of this same action.
+            .clickable(openNote),
     ) {
       if (title.isNotEmpty()) {
         Text(
@@ -170,36 +179,49 @@ class SingleNoteWidget : GlanceAppWidget() {
       // syntax the note's body carries - matches note_card.dart's own
       // in-app preview, just with plain Unicode box glyphs instead of
       // Material icons, since this widget renders no other icons either.
-      // Capped at a modest number of blocks, well below what
-      // note_card.dart allows itself - the in-app card lives in a
-      // scrollable masonry grid with real room to breathe; a home-screen
-      // widget's canvas is small and fixed, so cramming in as many lines
-      // as the card does just looks crowded here.
-      for (block in blocks.take(MAX_PREVIEW_BLOCKS)) {
-        when (block) {
-          is BodyBlock.Checklist -> ChecklistPreviewRow(block)
-          is BodyBlock.PlainText ->
-              if (block.text.isNotEmpty()) {
+      // Every block is included (no cap) - a fixed cap used to hide
+      // whatever was appended past it (e.g. a freshly added checklist
+      // item), which read as a sync bug even though the note itself was
+      // fine. defaultWeight() lets this claim whatever vertical space is
+      // left under the header, and LazyColumn makes that space scrollable
+      // instead of clipping - so a longer note just needs a swipe, at any
+      // widget size, rather than a hard per-note limit.
+      // An empty PlainText block (a blank line in the note) renders nothing
+      // in-app either - filtered out here rather than left in as a
+      // LazyColumn item with no content, which each item slot isn't meant
+      // to be.
+      val visibleBlocks = blocks.filter { it !is BodyBlock.PlainText || it.text.isNotEmpty() }
+      LazyColumn(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+        itemsIndexed(visibleBlocks) { _, block ->
+          when (block) {
+            is BodyBlock.Checklist -> ChecklistPreviewRow(block, openNote)
+            is BodyBlock.PlainText ->
                 Text(
                     text = block.text,
                     maxLines = 2,
                     style = previewTextStyle(isLink = block.isLink, fontSize = 16.sp),
-                    modifier = GlanceModifier.padding(top = 2.dp, bottom = 2.dp),
+                    modifier = GlanceModifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp, bottom = 2.dp)
+                        .clickable(openNote),
                 )
-              }
+          }
         }
       }
     }
   }
 
   @Composable
-  private fun ChecklistPreviewRow(block: BodyBlock.Checklist) {
+  private fun ChecklistPreviewRow(block: BodyBlock.Checklist, openNote: Action) {
     Row(
-        modifier = GlanceModifier.padding(
-            start = (block.indent * 12).dp,
-            top = 2.dp,
-            bottom = 2.dp,
-        ),
+        modifier = GlanceModifier
+            .fillMaxWidth()
+            .padding(
+                start = (block.indent * 12).dp,
+                top = 2.dp,
+                bottom = 2.dp,
+            )
+            .clickable(openNote),
         // The ☐/☑ glyphs come from a symbol font whose own line metrics
         // sit higher in its character cell than the surrounding Latin
         // text does in its cell - Row's CenterVertically centers each
@@ -225,9 +247,5 @@ class SingleNoteWidget : GlanceAppWidget() {
           ),
       )
     }
-  }
-
-  companion object {
-    private const val MAX_PREVIEW_BLOCKS = 5
   }
 }

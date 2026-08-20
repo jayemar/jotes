@@ -1,6 +1,8 @@
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'
+    hide RepeatInterval;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
+import 'package:jotes/services/background_sync_service.dart';
 import 'package:jotes/services/db_service.dart';
 import 'package:jotes/services/notification_service.dart';
 import 'package:jotes/services/snooze_settings.dart';
@@ -19,6 +21,7 @@ Note _note({
   required String id,
   DateTime? reminderAt,
   bool reminderResolved = false,
+  RepeatInterval repeatInterval = RepeatInterval.none,
 }) {
   final now = DateTime.now();
   return Note(
@@ -29,6 +32,7 @@ Note _note({
     created: now,
     updated: now,
     reminderResolved: reminderResolved,
+    repeatInterval: repeatInterval,
   );
 }
 
@@ -50,6 +54,7 @@ void main() {
     NotificationService.instance.debugOnSchedule = null;
     NotificationService.instance.debugOnCancel = null;
     NotificationService.instance.debugActiveNotificationIds = null;
+    BackgroundSyncService.instance.debugEnqueue = null;
   });
 
   group('reconcile', () {
@@ -269,11 +274,17 @@ void main() {
   });
 
   group('handleBackgroundReminderAction', () {
-    test('Dismiss cancels the tray notification and persists '
-        'reminderResolved on the note itself, so it syncs to other '
-        'devices - unlike the old local-only bookkeeping', () async {
+    test('Dismiss cancels the tray notification, persists '
+        'reminderResolved on the note itself, and enqueues a '
+        'BackgroundSyncService push - not an inline PbService push, which '
+        'this isolate has no guarantee it survives long enough to finish '
+        '(see BackgroundSyncService\'s own doc comment)', () async {
       final cancelled = <int>[];
       NotificationService.instance.debugOnCancel = cancelled.add;
+      var enqueued = 0;
+      BackgroundSyncService.instance.debugEnqueue = () async {
+        enqueued++;
+      };
       final note = _note(
         id: 'dismiss-me',
         reminderAt: DateTime.now().add(const Duration(hours: 1)),
@@ -285,6 +296,7 @@ void main() {
       );
 
       expect(cancelled, [note.notificationId]);
+      expect(enqueued, 1);
       final stored = await DbService.instance.getById('dismiss-me');
       expect(stored!.reminderResolved, isTrue);
       expect(
@@ -293,11 +305,51 @@ void main() {
       );
     });
 
-    test('Dismiss for a note that has since been deleted is a harmless '
-        'no-op - nothing to cancel or persist resolved state onto',
+    test('Dismiss for a repeating reminder rolls reminderAt forward to its '
+        'next occurrence, reschedules it, and leaves reminderResolved '
+        'false for the fresh cycle - instead of just marking it resolved',
         () async {
       final cancelled = <int>[];
       NotificationService.instance.debugOnCancel = cancelled.add;
+      final scheduled = <Note>[];
+      NotificationService.instance.debugOnSchedule = scheduled.add;
+      var enqueued = 0;
+      BackgroundSyncService.instance.debugEnqueue = () async {
+        enqueued++;
+      };
+      final reminderAt = DateTime.now().add(const Duration(hours: 1));
+      final note = _note(
+        id: 'dismiss-repeating',
+        reminderAt: reminderAt,
+        repeatInterval: RepeatInterval.daily,
+      );
+      await DbService.instance.upsert(note);
+
+      await handleBackgroundReminderAction(
+        _actionResponse(payload: 'dismiss-repeating', actionId: 'dismiss'),
+      );
+
+      expect(cancelled, [note.notificationId]);
+      expect(enqueued, 1);
+      final stored = await DbService.instance.getById('dismiss-repeating');
+      expect(stored!.reminderResolved, isFalse);
+      expect(
+        stored.reminderAt!.millisecondsSinceEpoch,
+        nextOccurrence(reminderAt, RepeatInterval.daily).millisecondsSinceEpoch,
+      );
+      expect(scheduled, hasLength(1));
+      expect(scheduled.single.id, 'dismiss-repeating');
+    });
+
+    test('Dismiss for a note that has since been deleted is a harmless '
+        'no-op - nothing to cancel, persist resolved state onto, or '
+        'enqueue a sync for', () async {
+      final cancelled = <int>[];
+      NotificationService.instance.debugOnCancel = cancelled.add;
+      var enqueued = 0;
+      BackgroundSyncService.instance.debugEnqueue = () async {
+        enqueued++;
+      };
 
       await expectLater(
         handleBackgroundReminderAction(
@@ -307,16 +359,22 @@ void main() {
       );
 
       expect(cancelled, isEmpty);
+      expect(enqueued, 0);
       expect(await DbService.instance.getById('already-deleted'), isNull);
     });
 
-    test("Snooze cancels the tray notification and updates the note's "
-        "reminderAt using the default snooze duration (1 hour), then "
-        'reschedules it', () async {
+    test("Snooze cancels the tray notification, updates the note's "
+        "reminderAt using the default snooze duration (1 hour), "
+        'reschedules it, and enqueues a BackgroundSyncService push',
+        () async {
       final cancelled = <int>[];
       NotificationService.instance.debugOnCancel = cancelled.add;
       final scheduled = <Note>[];
       NotificationService.instance.debugOnSchedule = scheduled.add;
+      var enqueued = 0;
+      BackgroundSyncService.instance.debugEnqueue = () async {
+        enqueued++;
+      };
       final note = _note(
         id: 'snooze-default',
         reminderAt: DateTime.now().add(const Duration(minutes: 5)),
@@ -328,6 +386,7 @@ void main() {
       );
 
       expect(cancelled, [note.notificationId]);
+      expect(enqueued, 1);
       final stored = await DbService.instance.getById('snooze-default');
       final expected = DateTime.now().add(const Duration(hours: 1));
       expect(

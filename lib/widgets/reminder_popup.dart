@@ -72,15 +72,12 @@ Future<void> showReminderPopup(BuildContext context, WidgetRef ref, Note note) {
                 // realtime subscription carries it to every other device,
                 // and SyncNotifier._handleRemoteEvent already cancels each
                 // of their tray notifications on any note update - see
-                // Note.reminderResolved's own doc comment.
+                // Note.reminderResolved's own doc comment. noteAfterDismiss
+                // instead rolls reminderAt forward when the note repeats -
+                // see its own doc comment.
                 await ref
                     .read(notesProvider.notifier)
-                    .addOrUpdate(
-                      note.copyWith(
-                        reminderResolved: true,
-                        updated: DateTime.now(),
-                      ),
-                    );
+                    .addOrUpdate(noteAfterDismiss(note));
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
               },
               child: const Text('Dismiss'),
