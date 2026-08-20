@@ -15,7 +15,11 @@ NotificationResponse _actionResponse({String? payload, String? actionId}) =>
       actionId: actionId,
     );
 
-Note _note({required String id, DateTime? reminderAt}) {
+Note _note({
+  required String id,
+  DateTime? reminderAt,
+  bool reminderResolved = false,
+}) {
   final now = DateTime.now();
   return Note(
     id: id,
@@ -24,6 +28,7 @@ Note _note({required String id, DateTime? reminderAt}) {
     reminderAt: reminderAt,
     created: now,
     updated: now,
+    reminderResolved: reminderResolved,
   );
 }
 
@@ -47,48 +52,115 @@ void main() {
     NotificationService.instance.debugActiveNotificationIds = null;
   });
 
-  group('resolved-reminder bookkeeping', () {
-    test('a note is not resolved by default', () async {
-      expect(
-        await NotificationService.instance.isReminderResolved('a'),
-        isFalse,
+  group('reconcile', () {
+    test('does nothing when neither reminderAt nor reminderResolved '
+        'changed - an unrelated edit (title/body/color) must not touch '
+        'notifications at all', () async {
+      final cancelled = <int>[];
+      NotificationService.instance.debugOnCancel = cancelled.add;
+      final scheduled = <Note>[];
+      NotificationService.instance.debugOnSchedule = scheduled.add;
+      final reminderAt = DateTime.now().add(const Duration(hours: 1));
+      final previous = _note(id: 'unchanged', reminderAt: reminderAt);
+      final next = previous.copyWith(title: 'New title');
+
+      final error = await NotificationService.instance.reconcile(
+        previous,
+        next,
       );
+
+      expect(error, isNull);
+      expect(cancelled, isEmpty);
+      expect(scheduled, isEmpty);
     });
 
-    test('markReminderResolved is reflected by isReminderResolved', () async {
-      await NotificationService.instance.markReminderResolved('a');
-
-      expect(
-        await NotificationService.instance.isReminderResolved('a'),
-        isTrue,
+    test('cancels and reschedules when reminderAt changed', () async {
+      final cancelled = <int>[];
+      NotificationService.instance.debugOnCancel = cancelled.add;
+      final scheduled = <Note>[];
+      NotificationService.instance.debugOnSchedule = scheduled.add;
+      final previous = _note(
+        id: 'changed-time',
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
       );
+      final next = previous.copyWith(
+        reminderAt: DateTime.now().add(const Duration(hours: 2)),
+      );
+
+      await NotificationService.instance.reconcile(previous, next);
+
+      expect(cancelled, [next.notificationId]);
+      expect(scheduled, hasLength(1));
+      expect(scheduled.single.id, 'changed-time');
     });
 
-    test('marking one note resolved does not affect another', () async {
-      await NotificationService.instance.markReminderResolved('a');
-
-      expect(
-        await NotificationService.instance.isReminderResolved('b'),
-        isFalse,
+    test('cancels and reschedules for a brand-new note (no previous copy) '
+        'with a future reminder', () async {
+      final cancelled = <int>[];
+      NotificationService.instance.debugOnCancel = cancelled.add;
+      final scheduled = <Note>[];
+      NotificationService.instance.debugOnSchedule = scheduled.add;
+      final next = _note(
+        id: 'brand-new',
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
       );
+
+      await NotificationService.instance.reconcile(null, next);
+
+      expect(cancelled, [next.notificationId]);
+      expect(scheduled, hasLength(1));
     });
 
-    test('schedule() clears a previously-resolved flag, so a note reused for '
-        'a new reminder cycle starts unresolved again', () async {
-      await NotificationService.instance.markReminderResolved('reused-note');
-      NotificationService.instance.debugOnSchedule = (_) {};
+    test('cancels but does not reschedule when only reminderResolved '
+        'changed (Dismiss/Snooze on an already-overdue reminder)', () async {
+      final cancelled = <int>[];
+      NotificationService.instance.debugOnCancel = cancelled.add;
+      final scheduled = <Note>[];
+      NotificationService.instance.debugOnSchedule = scheduled.add;
+      final reminderAt = DateTime.now().subtract(const Duration(hours: 1));
+      final previous = _note(id: 'dismissed', reminderAt: reminderAt);
+      final next = previous.copyWith(reminderResolved: true);
 
-      await NotificationService.instance.schedule(
-        _note(
-          id: 'reused-note',
-          reminderAt: DateTime.now().add(const Duration(hours: 1)),
-        ),
+      await NotificationService.instance.reconcile(previous, next);
+
+      expect(cancelled, [next.notificationId]);
+      expect(scheduled, isEmpty);
+    });
+
+    test('cancels but does not reschedule when reminderAt was cleared',
+        () async {
+      final cancelled = <int>[];
+      NotificationService.instance.debugOnCancel = cancelled.add;
+      final scheduled = <Note>[];
+      NotificationService.instance.debugOnSchedule = scheduled.add;
+      final previous = _note(
+        id: 'cleared',
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
+      );
+      final next = previous.copyWith(reminderAt: null);
+
+      await NotificationService.instance.reconcile(previous, next);
+
+      expect(cancelled, [next.notificationId]);
+      expect(scheduled, isEmpty);
+    });
+
+    test('returns the scheduling error without throwing, same contract as '
+        'schedule() itself', () async {
+      NotificationService.instance.debugOnSchedule = (_) {
+        throw Exception('boom');
+      };
+      final previous = _note(id: 'will-fail');
+      final next = previous.copyWith(
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
       );
 
-      expect(
-        await NotificationService.instance.isReminderResolved('reused-note'),
-        isFalse,
+      final error = await NotificationService.instance.reconcile(
+        previous,
+        next,
       );
+
+      expect(error, contains('boom'));
     });
   });
 
@@ -115,10 +187,8 @@ void main() {
         _note(
           id: 'resolved-overdue',
           reminderAt: DateTime.now().subtract(const Duration(minutes: 5)),
+          reminderResolved: true,
         ),
-      );
-      await NotificationService.instance.markReminderResolved(
-        'resolved-overdue',
       );
 
       await NotificationService.instance.restoreUnresolvedReminders();
@@ -199,8 +269,9 @@ void main() {
   });
 
   group('handleBackgroundReminderAction', () {
-    test('Dismiss cancels the tray notification and marks the reminder '
-        'resolved without touching the note in the DB', () async {
+    test('Dismiss cancels the tray notification and persists '
+        'reminderResolved on the note itself, so it syncs to other '
+        'devices - unlike the old local-only bookkeeping', () async {
       final cancelled = <int>[];
       NotificationService.instance.debugOnCancel = cancelled.add;
       final note = _note(
@@ -214,33 +285,29 @@ void main() {
       );
 
       expect(cancelled, [note.notificationId]);
-      expect(
-        await NotificationService.instance.isReminderResolved('dismiss-me'),
-        isTrue,
-      );
       final stored = await DbService.instance.getById('dismiss-me');
+      expect(stored!.reminderResolved, isTrue);
       expect(
-        stored!.reminderAt!.millisecondsSinceEpoch,
+        stored.reminderAt!.millisecondsSinceEpoch,
         note.reminderAt!.millisecondsSinceEpoch,
       );
     });
 
-    test('Dismiss for a note that has since been deleted still marks it '
-        'resolved, with no notification to cancel', () async {
+    test('Dismiss for a note that has since been deleted is a harmless '
+        'no-op - nothing to cancel or persist resolved state onto',
+        () async {
       final cancelled = <int>[];
       NotificationService.instance.debugOnCancel = cancelled.add;
 
-      await handleBackgroundReminderAction(
-        _actionResponse(payload: 'already-deleted', actionId: 'dismiss'),
+      await expectLater(
+        handleBackgroundReminderAction(
+          _actionResponse(payload: 'already-deleted', actionId: 'dismiss'),
+        ),
+        completes,
       );
 
       expect(cancelled, isEmpty);
-      expect(
-        await NotificationService.instance.isReminderResolved(
-          'already-deleted',
-        ),
-        isTrue,
-      );
+      expect(await DbService.instance.getById('already-deleted'), isNull);
     });
 
     test("Snooze cancels the tray notification and updates the note's "
@@ -269,6 +336,7 @@ void main() {
       );
       expect(scheduled, hasLength(1));
       expect(scheduled.single.id, 'snooze-default');
+      expect(stored.reminderResolved, isFalse);
     });
 
     test('Snooze respects a configured custom delay', () async {
@@ -362,15 +430,10 @@ void main() {
         _actionResponse(payload: 'unrecognized-action', actionId: 'nonsense'),
       );
 
-      expect(
-        await NotificationService.instance.isReminderResolved(
-          'unrecognized-action',
-        ),
-        isFalse,
-      );
       final stored = await DbService.instance.getById('unrecognized-action');
+      expect(stored!.reminderResolved, isFalse);
       expect(
-        stored!.reminderAt!.millisecondsSinceEpoch,
+        stored.reminderAt!.millisecondsSinceEpoch,
         note.reminderAt!.millisecondsSinceEpoch,
       );
     });

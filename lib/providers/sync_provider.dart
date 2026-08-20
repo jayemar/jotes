@@ -129,21 +129,16 @@ class SyncNotifier extends Notifier<SyncState> {
       try {
         await NotificationService.instance.cancel(note.notificationId);
       } catch (_) {
-        // Not fatal - see addOrUpdate in notes_provider.dart for the same
-        // reasoning.
+        // Not fatal - the note is already deleted either way.
       }
     } else {
+      final previous = await DbService.instance.getById(note.id);
       await DbService.instance.upsert(note);
-      try {
-        await NotificationService.instance.cancel(note.notificationId);
-        if (note.reminderAt != null &&
-            note.reminderAt!.isAfter(DateTime.now())) {
-          await NotificationService.instance.schedule(note);
-        }
-      } catch (_) {
-        // Not fatal - see addOrUpdate in notes_provider.dart for the same
-        // reasoning.
-      }
+      // reconcile only touches notifications if the reminder itself
+      // actually changed (see its own doc comment) - an incoming remote
+      // edit to an unrelated field must not cancel an already-fired
+      // reminder just because this note happened to sync.
+      await NotificationService.instance.reconcile(previous, note);
     }
 
     ref.invalidate(notesProvider);

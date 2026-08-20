@@ -78,6 +78,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   late int _colorIndex;
   late String _noteId;
   DateTime? _reminderAt;
+  bool _reminderResolved = false;
   bool _dirty = false;
   bool _saving = false;
 
@@ -103,6 +104,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     _currentBody = n?.body ?? widget.initialBody ?? '';
     _colorIndex = n?.colorIndex ?? 0;
     _reminderAt = n?.reminderAt;
+    _reminderResolved = n?.reminderResolved ?? false;
     _lastKnownUpdated = n?.updated;
     // Generated once per editing session so repeated saves (e.g. multiple
     // back-button presses before the first save/pop completes) update the
@@ -143,6 +145,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       reminderAt: _reminderAt,
       created: existing?.created ?? now,
       updated: now,
+      reminderResolved: _reminderResolved,
     );
   }
 
@@ -201,6 +204,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       _currentBody = remote.body;
       _colorIndex = remote.colorIndex;
       _reminderAt = remote.reminderAt;
+      _reminderResolved = remote.reminderResolved;
       _lastKnownUpdated = remote.updated;
     });
     _bodyEditorKey.currentState?.applyExternalBody(remote.body);
@@ -241,6 +245,10 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     );
     setState(() {
       _reminderAt = reminderAt;
+      // A fresh reminder cycle - see Note.reminderResolved's own doc
+      // comment for why whoever sets a new reminderAt is responsible for
+      // also clearing this, rather than something downstream inferring it.
+      _reminderResolved = false;
       _dirty = true;
     });
 
@@ -356,6 +364,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   Future<void> _clearReminder() async {
     setState(() {
       _reminderAt = null;
+      _reminderResolved = false;
       _dirty = true;
     });
     await _save();
@@ -525,6 +534,13 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         ThemeData.estimateBrightnessForColor(bgColor) == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black87;
     final hintColor = textColor.withAlpha(100);
+    // A fixed link-blue (lighter on a dark note, darker on a light one, same
+    // idea as textColor/hintColor above) rather than deriving it from the
+    // note's own background color - links are conventionally blue
+    // regardless of surrounding color, and this app's note backgrounds span
+    // ten different hues (see kNoteColors/kNoteColorsDark in note.dart) that
+    // a single derived tint couldn't reliably stay legible against.
+    final linkColor = isDark ? Colors.lightBlueAccent : Colors.blue;
 
     // Live "follow along on another device" - see _maybeApplyRemoteUpdate.
     // Watched here (not just from NotesScreen) so an update to this note
@@ -599,7 +615,9 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                   hintStyle: TextStyle(color: hintColor),
                   border: InputBorder.none,
                 ),
+                textInputAction: TextInputAction.next,
                 onChanged: (_) => _markDirty(),
+                onSubmitted: (_) => _bodyEditorKey.currentState?.focusBody(),
                 textCapitalization: TextCapitalization.sentences,
               ),
             ),
@@ -612,6 +630,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                       widget.existing?.body ?? widget.initialBody ?? '',
                   textColor: textColor,
                   hintColor: hintColor,
+                  linkColor: linkColor,
                   autofocusFirst: widget.existing == null,
                   onChanged: (body) {
                     _currentBody = body;
@@ -622,6 +641,12 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                     // re-check canUndo for the toolbar button below.
                     setState(() {});
                   },
+                  // Keeps the move-up/move-down buttons' enabled state (see
+                  // isEditingBody below) in sync with every view/edit mode
+                  // transition, not just the next unrelated rebuild -
+                  // separate from onChanged above since switching modes
+                  // alone shouldn't mark the note dirty or restart autosave.
+                  onModeChanged: () => setState(() {}),
                 ),
               ),
             ),
@@ -639,15 +664,41 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                 child: Row(
                   children: [
                     IconButton(
-                      icon: Icon(Icons.palette_outlined, color: textColor),
-                      onPressed: _pickColor,
-                      tooltip: 'Change color',
-                    ),
-                    IconButton(
                       icon: Icon(Icons.check_box_outlined, color: textColor),
                       onPressed: () =>
-                          _bodyEditorKey.currentState?.addChecklistItem(),
-                      tooltip: 'Add checklist item',
+                          _bodyEditorKey.currentState?.toggleChecklistLine(),
+                      tooltip: 'Toggle checklist item',
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.format_list_bulleted_outlined,
+                        color: textColor,
+                      ),
+                      onPressed: () =>
+                          _bodyEditorKey.currentState?.toggleBulletLine(),
+                      tooltip: 'Toggle list item',
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.arrow_upward_outlined,
+                        color: textColor,
+                      ),
+                      onPressed:
+                          _bodyEditorKey.currentState?.isEditingBody == true
+                          ? () => _bodyEditorKey.currentState?.moveLineUp()
+                          : null,
+                      tooltip: 'Move line up',
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.arrow_downward_outlined,
+                        color: textColor,
+                      ),
+                      onPressed:
+                          _bodyEditorKey.currentState?.isEditingBody == true
+                          ? () => _bodyEditorKey.currentState?.moveLineDown()
+                          : null,
+                      tooltip: 'Move line down',
                     ),
                     IconButton(
                       icon: Icon(Icons.undo, color: textColor),
@@ -663,6 +714,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                       tooltip: 'More options',
                       onSelected: (value) {
                         switch (value) {
+                          case 'color':
+                            _pickColor();
                           case 'export':
                             _exportToMarkdown();
                           case 'share':
@@ -674,6 +727,14 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                         }
                       },
                       itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'color',
+                          child: ListTile(
+                            leading: Icon(Icons.palette_outlined),
+                            title: Text('Change color'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
                         const PopupMenuItem(
                           value: 'export',
                           child: ListTile(

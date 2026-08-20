@@ -3,6 +3,7 @@ package com.jayemar.jotes
 import android.content.Context
 import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
@@ -33,16 +34,26 @@ import org.json.JSONObject
 
 /** Mirrors note_body_editor.dart's BodyBlock - see [parseBlocks]. */
 private sealed class BodyBlock {
-  data class Checklist(val checked: Boolean, val text: String, val indent: Int) : BodyBlock()
+  data class Checklist(
+      val checked: Boolean,
+      val text: String,
+      val isLink: Boolean,
+      val indent: Int,
+  ) : BodyBlock()
 
-  data class PlainText(val text: String) : BodyBlock()
+  data class PlainText(val text: String, val isLink: Boolean) : BodyBlock()
 }
 
 /**
  * Reads the `blocks` array WidgetService.buildSingleNoteJson (Dart side)
  * already parsed via parseBody - re-parsing the raw "- [ ] "/"- [x] "
  * markdown syntax here in Kotlin too would mean two independent
- * implementations of the same regex to keep in sync.
+ * implementations of the same regex to keep in sync. Same reasoning for
+ * `isLink`/link-syntax stripping (see WidgetService's own comment on
+ * buildSingleNoteJson) - Glance can't render a mixed-style line at all, so
+ * `text` has already been reduced to just its display label on the Dart
+ * side, and `isLink` says whether that whole block is nothing but a link
+ * (the only case worth styling specially here - see WidgetContent).
  */
 private fun parseBlocks(json: JSONObject): List<BodyBlock> {
   val array = json.optJSONArray("blocks") ?: return emptyList()
@@ -53,12 +64,35 @@ private fun parseBlocks(json: JSONObject): List<BodyBlock> {
           BodyBlock.Checklist(
               checked = obj.optBoolean("checked", false),
               text = obj.optString("text", ""),
+              isLink = obj.optBoolean("isLink", false),
               indent = obj.optInt("indent", 0),
           )
-      "text" -> BodyBlock.PlainText(obj.optString("text", ""))
+      "text" ->
+          BodyBlock.PlainText(
+              text = obj.optString("text", ""),
+              isLink = obj.optBoolean("isLink", false),
+          )
       else -> null
     }
   }
+}
+
+/** Link-blue + underline when [isLink], the normal note text color otherwise. */
+private fun previewTextStyle(
+    isLink: Boolean,
+    fontSize: TextUnit,
+    strikethrough: Boolean = false,
+): TextStyle {
+  val decoration = when {
+    strikethrough -> TextDecoration.LineThrough
+    isLink -> TextDecoration.Underline
+    else -> TextDecoration.None
+  }
+  return TextStyle(
+      color = if (isLink) linkColorProvider else noteTextColorProvider,
+      fontSize = fontSize,
+      textDecoration = decoration,
+  )
 }
 
 /**
@@ -149,7 +183,7 @@ class SingleNoteWidget : GlanceAppWidget() {
                 Text(
                     text = block.text,
                     maxLines = 2,
-                    style = TextStyle(color = noteTextColorProvider, fontSize = 16.sp),
+                    style = previewTextStyle(isLink = block.isLink, fontSize = 16.sp),
                     modifier = GlanceModifier.padding(top = 2.dp, bottom = 2.dp),
                 )
               }
@@ -184,11 +218,10 @@ class SingleNoteWidget : GlanceAppWidget() {
       Text(
           text = block.text,
           maxLines = 1,
-          style = TextStyle(
-              color = noteTextColorProvider,
+          style = previewTextStyle(
+              isLink = block.isLink,
               fontSize = 16.sp,
-              textDecoration = if (block.checked) TextDecoration.LineThrough
-              else TextDecoration.None,
+              strikethrough = block.checked,
           ),
       )
     }

@@ -1,4 +1,7 @@
+import 'dart:async' show unawaited;
+
 import 'package:shared_preferences/shared_preferences.dart';
+import 'pb_service.dart';
 
 const _snoozeModePrefsKey = 'snooze_mode';
 const _snoozeCustomDelayMinutesPrefsKey = 'snooze_custom_delay_minutes';
@@ -51,6 +54,10 @@ class SnoozeSettings {
   Future<void> setMode(SnoozeMode mode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_snoozeModePrefsKey, mode.name);
+    // Fire-and-forget, same reasoning as PbService.upsert's own callers -
+    // this setting is already saved locally above regardless of whether
+    // the sync push succeeds; see pullFromServer for the other direction.
+    unawaited(PbService.instance.updateUserData({'snooze_mode': mode.name}));
   }
 
   /// Only meaningful when [getMode] returns [SnoozeMode.custom].
@@ -65,10 +72,13 @@ class SnoozeSettings {
   /// (well past anything a "snooze" is meant for, and large enough to
   /// catch a stray typo like an extra digit).
   Future<void> setCustomDelayMinutes(int minutes) async {
+    final clamped = minutes.clamp(1, _maxCustomDelayMinutes);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(
-      _snoozeCustomDelayMinutesPrefsKey,
-      minutes.clamp(1, _maxCustomDelayMinutes),
+    await prefs.setInt(_snoozeCustomDelayMinutesPrefsKey, clamped);
+    unawaited(
+      PbService.instance.updateUserData({
+        'snooze_custom_delay_minutes': clamped,
+      }),
     );
   }
 
@@ -81,11 +91,59 @@ class SnoozeSettings {
   }
 
   Future<void> setTimeOfDayMinutes(int minutesSinceMidnight) async {
+    final clamped = minutesSinceMidnight.clamp(0, 24 * 60 - 1);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(
-      _snoozeTimeOfDayMinutesPrefsKey,
-      minutesSinceMidnight.clamp(0, 24 * 60 - 1),
+    await prefs.setInt(_snoozeTimeOfDayMinutesPrefsKey, clamped);
+    unawaited(
+      PbService.instance.updateUserData({
+        'snooze_time_of_day_minutes': clamped,
+      }),
     );
+  }
+
+  /// Pulls this account's snooze settings down from the current user
+  /// record (see PbService.userData) into local SharedPreferences, so a
+  /// choice made on another device applies here too - called after every
+  /// PbService.refreshAuth() succeeds (see mergeSync), which is what keeps
+  /// that record's own data current, so no separate fetch is needed here.
+  /// A no-op if not logged in, or if snooze_mode has never been set
+  /// remotely at all (a fresh account, or a device that's never opened
+  /// Settings) - unlike the two numeric fields, an empty string is
+  /// unambiguously "never configured" (not a valid SnoozeMode.name), so
+  /// it's the one used to decide whether the whole record is worth
+  /// trusting; once it is, 0-valued numeric fields are applied as-is
+  /// rather than mistaken for "unset" too (0 minutes past midnight is a
+  /// legitimate time-of-day).
+  Future<void> pullFromServer() async {
+    final data = PbService.instance.userData;
+    if (data == null) return;
+    final modeName = data['snooze_mode'] as String?;
+    if (modeName == null || modeName.isEmpty) return;
+    SnoozeMode? mode;
+    for (final candidate in SnoozeMode.values) {
+      if (candidate.name == modeName) mode = candidate;
+    }
+    if (mode == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_snoozeModePrefsKey, mode.name);
+
+    final customDelay = (data['snooze_custom_delay_minutes'] as num?)
+        ?.toInt();
+    if (customDelay != null) {
+      await prefs.setInt(
+        _snoozeCustomDelayMinutesPrefsKey,
+        customDelay.clamp(1, _maxCustomDelayMinutes),
+      );
+    }
+
+    final timeOfDay = (data['snooze_time_of_day_minutes'] as num?)?.toInt();
+    if (timeOfDay != null) {
+      await prefs.setInt(
+        _snoozeTimeOfDayMinutesPrefsKey,
+        timeOfDay.clamp(0, 24 * 60 - 1),
+      );
+    }
   }
 
   /// Resolves the currently configured snooze setting to an actual point

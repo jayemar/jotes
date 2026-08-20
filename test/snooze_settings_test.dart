@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jotes/services/pb_service.dart';
 import 'package:jotes/services/snooze_settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -160,6 +161,21 @@ void main() {
         await SnoozeSettings.instance.resolveNext(now: now),
         DateTime(2026, 7, 31, 10),
       );
+    });
+  });
+
+  group('pullFromServer', () {
+    test('is a harmless no-op when not logged into a sync server - the '
+        'local value (default or previously saved) is left untouched',
+        () async {
+      // PbService.instance.userData is null whenever no PocketBase client
+      // has ever been configured (see PbService.connect/restore) - true by
+      // default in a plain test run with no server connection made.
+      expect(PbService.instance.userData, isNull);
+
+      await SnoozeSettings.instance.pullFromServer();
+
+      expect(await SnoozeSettings.instance.getMode(), SnoozeMode.oneHour);
     });
   });
 }

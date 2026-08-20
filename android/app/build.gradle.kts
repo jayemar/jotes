@@ -1,3 +1,12 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 plugins {
     id("com.android.application")
     // Required for the home-screen widgets (SingleNoteWidget/ReminderListWidget),
@@ -30,11 +39,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // A dedicated, persistent key (see android/key.properties, gitignored)
+        // rather than the ambient debug key - Android only treats an install
+        // as an in-place update (preserving app data, notably the PocketBase
+        // auth token in SharedPreferences) when the new APK's signature
+        // matches the currently-installed one, so signing release builds
+        // with a key that changes across machines/environments meant every
+        // "update" install was actually silently wiped and re-created,
+        // logging the user out.
+        create("release") {
+            keyAlias = keystoreProperties["keyAlias"] as String?
+            keyPassword = keystoreProperties["keyPassword"] as String?
+            storeFile = keystoreProperties["storeFile"]?.let { file(it) }
+            storePassword = keystoreProperties["storePassword"] as String?
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

@@ -6,12 +6,22 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.TimeUnit
 
 private const val AUTOSTART_CHANNEL = "com.jayemar.jotes/autostart"
 private const val SHARE_CHANNEL = "com.jayemar.jotes/share"
+private const val PERIODIC_REFRESH_CHANNEL = "com.jayemar.jotes/periodic_refresh"
+private const val PERIODIC_REFRESH_WORK_NAME = "periodic_refresh"
+// The shortest interval Android's WorkManager allows for periodic work -
+// anything shorter is silently clamped to this by the OS anyway. See
+// PeriodicRefreshWorker's own doc comment for what this actually refreshes.
+private const val PERIODIC_REFRESH_INTERVAL_MINUTES = 15L
 
 /**
  * Component names for each OEM's own undocumented "autostart"/background
@@ -146,6 +156,23 @@ class MainActivity : FlutterActivity() {
           }
         }
 
+    // The on/off decision itself lives in Dart-side SharedPreferences (see
+    // PeriodicRefreshSettings) - not readable/writable from here without
+    // depending on the Flutter plugin's internal storage format, so Dart
+    // tells this side what to do instead: once at every normal app startup
+    // (to cover a fresh install's default-on state, and to survive an
+    // app update) and immediately on every Settings toggle.
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PERIODIC_REFRESH_CHANNEL)
+        .setMethodCallHandler { call, result ->
+          when (call.method) {
+            "setPeriodicRefreshEnabled" -> {
+              applyPeriodicRefreshSchedule(call.arguments as? Boolean ?: true)
+              result.success(null)
+            }
+            else -> result.notImplemented()
+          }
+        }
+
     val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
     shareChannel = channel
     channel.setMethodCallHandler { call, result ->
@@ -171,6 +198,27 @@ class MainActivity : FlutterActivity() {
     setIntent(intent)
     val share = extractShare(intent) ?: return
     shareChannel?.invokeMethod("onSharedText", share)
+  }
+
+  /// See PeriodicRefreshWorker's own doc comment for what the job itself
+  /// does. enqueueUniquePeriodicWork with KEEP is a no-op if a matching job
+  /// is already scheduled, and cancelUniqueWork is a no-op if none is -
+  /// both safe to call on every normal app startup, not just on an actual
+  /// toggle.
+  private fun applyPeriodicRefreshSchedule(enabled: Boolean) {
+    val workManager = WorkManager.getInstance(applicationContext)
+    if (enabled) {
+      val request = PeriodicWorkRequestBuilder<PeriodicRefreshWorker>(
+          PERIODIC_REFRESH_INTERVAL_MINUTES, TimeUnit.MINUTES,
+      ).build()
+      workManager.enqueueUniquePeriodicWork(
+          PERIODIC_REFRESH_WORK_NAME,
+          ExistingPeriodicWorkPolicy.KEEP,
+          request,
+      )
+    } else {
+      workManager.cancelUniqueWork(PERIODIC_REFRESH_WORK_NAME)
+    }
   }
 
   private fun extractShare(intent: Intent?): Map<String, String>? {

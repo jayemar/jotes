@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jotes/services/link_service.dart';
 import 'package:jotes/widgets/note_body_editor.dart';
 
 void main() {
@@ -372,6 +374,178 @@ void main() {
     });
   });
 
+  group('matchAnyLineMarker', () {
+    test('matches a checklist line', () {
+      final match = matchAnyLineMarker('- [ ] Buy milk')!;
+      expect(match.text, 'Buy milk');
+      expect(match.rawPrefixLength, 6);
+    });
+
+    test('matches a bullet line', () {
+      final match = matchAnyLineMarker('- Buy milk')!;
+      expect(match.text, 'Buy milk');
+      expect(match.rawPrefixLength, 2);
+    });
+
+    test('matches a numbered line', () {
+      final match = matchAnyLineMarker('1. Buy milk')!;
+      expect(match.text, 'Buy milk');
+      expect(match.rawPrefixLength, 3);
+    });
+
+    test('returns null for plain text', () {
+      expect(matchAnyLineMarker('Just some text'), isNull);
+    });
+  });
+
+  group('toggleLineMarker', () {
+    test('adds the marker to a plain-text line, placing the cursor right '
+        'after it, unchanged relative to the line\'s own text', () {
+      const text = 'Buy milk';
+      final result = toggleLineMarker(
+        text: text,
+        cursorOffset: 0,
+        marker: '- [ ] ',
+      );
+      expect(result.text, '- [ ] Buy milk');
+      expect(result.selection.baseOffset, '- [ ] '.length);
+    });
+
+    test('removes the marker when the line already uses that exact one, '
+        'back to plain text', () {
+      const text = '- [ ] Buy milk';
+      final result = toggleLineMarker(
+        text: text,
+        cursorOffset: text.length,
+        marker: '- [ ] ',
+      );
+      expect(result.text, 'Buy milk');
+      expect(result.selection.baseOffset, 'Buy milk'.length);
+    });
+
+    test('switches to the new marker when the line already uses a '
+        'different one, rather than stacking both', () {
+      const text = '- Buy milk';
+      final result = toggleLineMarker(
+        text: text,
+        cursorOffset: text.length,
+        marker: '- [ ] ',
+      );
+      expect(result.text, '- [ ] Buy milk');
+    });
+
+    test('a numbered line switched to a checklist item drops the digits '
+        'too, not just the ". "', () {
+      const text = '1. Buy milk';
+      final result = toggleLineMarker(
+        text: text,
+        cursorOffset: text.length,
+        marker: '- [ ] ',
+      );
+      expect(result.text, '- [ ] Buy milk');
+    });
+
+    test('only the line the cursor is on is affected, not the whole body',
+        () {
+      const text = 'First line\nSecond line\nThird line';
+      final cursor = text.indexOf('Second');
+      final result = toggleLineMarker(
+        text: text,
+        cursorOffset: cursor,
+        marker: '- ',
+      );
+      expect(result.text, 'First line\n- Second line\nThird line');
+    });
+
+    test('preserves leading indent', () {
+      const text = '  - [ ] Sub-item';
+      final result = toggleLineMarker(
+        text: text,
+        cursorOffset: text.length,
+        marker: '- [ ] ',
+      );
+      expect(result.text, '  Sub-item');
+    });
+
+    test('keeps the cursor anchored to the same character of the line\'s '
+        'own text, not a now-stale raw offset, when the marker length '
+        'changes', () {
+      // Cursor sits right after "Buy" in "- Buy milk" (offset 5) - after
+      // switching to "- [ ] ", it should still sit right after "Buy" in
+      // "- [ ] Buy milk" (offset 9), not still at raw offset 5 (which
+      // would now land inside the new marker itself).
+      const text = '- Buy milk';
+      final result = toggleLineMarker(
+        text: text,
+        cursorOffset: text.indexOf('Buy') + 3,
+        marker: '- [ ] ',
+      );
+      expect(result.selection.baseOffset, result.text.indexOf('Buy') + 3);
+    });
+  });
+
+  group('swapLine', () {
+    test('moves the current line up past its neighbor', () {
+      const text = 'First\nSecond\nThird';
+      final result = swapLine(
+        text: text,
+        cursorOffset: text.indexOf('Second'),
+        direction: -1,
+      )!;
+      expect(result.text, 'Second\nFirst\nThird');
+    });
+
+    test('moves the current line down past its neighbor', () {
+      const text = 'First\nSecond\nThird';
+      final result = swapLine(
+        text: text,
+        cursorOffset: text.indexOf('Second'),
+        direction: 1,
+      )!;
+      expect(result.text, 'First\nThird\nSecond');
+    });
+
+    test('returns null when already the first line and moving up', () {
+      const text = 'First\nSecond';
+      final result = swapLine(
+        text: text,
+        cursorOffset: text.indexOf('First'),
+        direction: -1,
+      );
+      expect(result, isNull);
+    });
+
+    test('returns null when already the last line and moving down', () {
+      const text = 'First\nSecond';
+      final result = swapLine(
+        text: text,
+        cursorOffset: text.indexOf('Second'),
+        direction: 1,
+      );
+      expect(result, isNull);
+    });
+
+    test('keeps the cursor on the same character of the moved line\'s own '
+        'text, following it to its new position', () {
+      const text = 'First\nSecond\nThird';
+      // Cursor right after "Sec" in "Second" (2 chars into that line).
+      final cursor = text.indexOf('Second') + 3;
+      final result = swapLine(text: text, cursorOffset: cursor, direction: -1)!;
+      final newLineStart = result.text.indexOf('Second');
+      expect(result.selection.baseOffset, newLineStart + 3);
+    });
+
+    test('list markers move with their line, not left behind', () {
+      const text = '- [ ] First\nPlain second';
+      final result = swapLine(
+        text: text,
+        cursorOffset: 0,
+        direction: 1,
+      )!;
+      expect(result.text, 'Plain second\n- [ ] First');
+    });
+  });
+
   group('NoteBodyEditor widget', () {
     Future<String> pumpEditor(
       WidgetTester tester, {
@@ -387,6 +561,7 @@ void main() {
               initialBody: initialBody,
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -440,6 +615,7 @@ void main() {
               initialBody: '- [ ] Buy milk',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -468,6 +644,7 @@ void main() {
               initialBody: 'Some notes.',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -493,6 +670,244 @@ void main() {
       );
     });
 
+    testWidgets('the "Add list item" trigger appends a new empty bullet and '
+        'switches to edit mode with the cursor right after it, same as '
+        '"Add checklist item" but with a plain "- " marker instead of a '
+        'checkbox', (tester) async {
+      final key = GlobalKey<NoteBodyEditorState>();
+      String latest = '';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NoteBodyEditor(
+              key: key,
+              initialBody: 'Some notes.',
+              textColor: Colors.black,
+              hintColor: Colors.black38,
+              linkColor: Colors.blue,
+              onChanged: (body) => latest = body,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.addBulletItem();
+      await tester.pumpAndSettle();
+
+      expect(key.currentState!.isEditingBody, isTrue);
+      expect(latest, 'Some notes.\n- ');
+      expect(tester.testTextInput.isVisible, isTrue);
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller!.text, 'Some notes.\n- ');
+      expect(
+        field.controller!.selection,
+        const TextSelection.collapsed(offset: 14),
+      );
+    });
+
+    testWidgets(
+      'toggleChecklistLine adds a checklist marker to the line currently '
+      'being edited, in place, rather than appending a new item at the end',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Buy milk\nSecond line',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Cursor at offset 0, on the first line ("Buy milk").
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+
+        key.currentState!.toggleChecklistLine();
+        await tester.pumpAndSettle();
+
+        expect(latest, '- [ ] Buy milk\nSecond line');
+        expect(key.currentState!.isEditingBody, isTrue);
+      },
+    );
+
+    testWidgets(
+      'toggleChecklistLine tapped again on the same (now checklist) line '
+      'removes the marker, back to plain text',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: '- [ ] Buy milk',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+        key.currentState!.toggleChecklistLine();
+        await tester.pumpAndSettle();
+
+        expect(latest, 'Buy milk');
+      },
+    );
+
+    testWidgets(
+      'toggleBulletLine while not currently editing falls back to '
+      'appending a new empty bullet at the end - there is no "current '
+      'line" to toggle without an active cursor',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Some notes.',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(key.currentState!.isEditingBody, isFalse);
+        key.currentState!.toggleBulletLine();
+        await tester.pumpAndSettle();
+
+        expect(latest, 'Some notes.\n- ');
+        expect(key.currentState!.isEditingBody, isTrue);
+      },
+    );
+
+    testWidgets('moveLineUp swaps the currently-edited line with the one '
+        'above it', (tester) async {
+      final key = GlobalKey<NoteBodyEditorState>();
+      String latest = '';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NoteBodyEditor(
+              key: key,
+              initialBody: 'First\nSecond',
+              textColor: Colors.black,
+              hintColor: Colors.black38,
+              linkColor: Colors.blue,
+              onChanged: (body) => latest = body,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // focusBody() enters edit mode with the cursor at offset 0, on
+      // "First" - move it onto "Second" the same way a user placing the
+      // cursor there would, by driving the rendered field's own selection.
+      key.currentState!.focusBody();
+      await tester.pumpAndSettle();
+      final controller = tester
+          .widget<TextField>(find.byType(TextField))
+          .controller!;
+      controller.selection = const TextSelection.collapsed(
+        offset: 'First\nSecond'.length,
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.moveLineUp();
+      await tester.pumpAndSettle();
+
+      expect(latest, 'Second\nFirst');
+    });
+
+    testWidgets(
+      'moveLineUp/moveLineDown are a no-op while not currently editing - '
+      'there is no "current line" without an active cursor',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'First\nSecond',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(key.currentState!.isEditingBody, isFalse);
+        key.currentState!.moveLineUp();
+        key.currentState!.moveLineDown();
+        await tester.pumpAndSettle();
+
+        expect(latest, isEmpty); // onChanged never fired
+        expect(key.currentState!.isEditingBody, isFalse);
+      },
+    );
+
+    testWidgets(
+      'onModeChanged fires when entering and leaving edit mode, so a '
+      'parent toolbar (e.g. move-line buttons) can stay in sync',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        var modeChangedCount = 0;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Some notes.',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (_) {},
+                onModeChanged: () => modeChangedCount++,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+        expect(modeChangedCount, 1);
+
+        key.currentState!.exitEditMode();
+        await tester.pumpAndSettle();
+        expect(modeChangedCount, 2);
+      },
+    );
+
     testWidgets('the remove (x) button deletes a checklist item', (
       tester,
     ) async {
@@ -506,6 +921,7 @@ void main() {
               initialBody: '- [ ] keep me\n- [ ] remove me',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -538,6 +954,7 @@ void main() {
                 initialBody: 'First\n- [ ] Item\nSecond',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -584,6 +1001,7 @@ void main() {
                 initialBody: '- [ ] first',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -625,6 +1043,7 @@ void main() {
               initialBody: '- [ ] first',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -664,6 +1083,7 @@ void main() {
                 initialBody: '- [ ] first\n- [ ] second\n- [ ] third',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -697,6 +1117,7 @@ void main() {
                     '- [ ] A1\n- [ ] A2\nSeparator\n- [ ] B1\n- [ ] B2',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -732,6 +1153,7 @@ void main() {
                 initialBody: '- [ ] parent\n- [ ] child',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -763,6 +1185,7 @@ void main() {
                 initialBody: '- [ ] parent\n  - [ ] child',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -795,6 +1218,7 @@ void main() {
                 initialBody: initialBody,
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -823,6 +1247,7 @@ void main() {
               initialBody: '- [ ] parent\n  - [ ] child',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -851,6 +1276,7 @@ void main() {
               initialBody: initialBody,
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -881,6 +1307,7 @@ void main() {
                 initialBody: '- [ ] parent\n  - [ ] child',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (body) => latest = body,
               ),
             ),
@@ -909,6 +1336,7 @@ void main() {
               initialBody: '- [ ] parent\n  - [ ] child',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -954,6 +1382,7 @@ void main() {
                 initialBody: '- [ ] copy my text',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (_) {},
               ),
             ),
@@ -999,6 +1428,7 @@ void main() {
                 initialBody: '- [ ] parent\n  - [x] done sub-item',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (_) {},
               ),
             ),
@@ -1027,6 +1457,7 @@ void main() {
               initialBody: '- [ ] item',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (_) {},
             ),
           ),
@@ -1048,6 +1479,7 @@ void main() {
               initialBody: '- [ ] item',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -1078,6 +1510,7 @@ void main() {
               initialBody: '- [ ] keep me\n- [ ] remove me',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -1106,6 +1539,7 @@ void main() {
               initialBody: '- [ ] parent\n- [ ] child',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -1138,6 +1572,7 @@ void main() {
               initialBody: '- [ ] first\n- [ ] second\n- [ ] third',
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -1182,6 +1617,7 @@ void main() {
               initialBody: initialBody,
               textColor: Colors.black,
               hintColor: Colors.black38,
+              linkColor: Colors.blue,
               onChanged: (body) => latest = body,
             ),
           ),
@@ -1210,6 +1646,7 @@ void main() {
                 initialBody: 'abcdefghij',
                 textColor: Colors.black,
                 hintColor: Colors.black38,
+                linkColor: Colors.blue,
                 onChanged: (_) {},
               ),
             ),
@@ -1243,6 +1680,7 @@ void main() {
                   initialBody: body,
                   textColor: Colors.black,
                   hintColor: Colors.black38,
+                  linkColor: Colors.blue,
                   onChanged: (_) {},
                 ),
               ),
@@ -1280,6 +1718,7 @@ void main() {
                       initialBody: 'plain text',
                       textColor: Colors.black,
                       hintColor: Colors.black38,
+                      linkColor: Colors.blue,
                       onChanged: (_) {},
                     ),
                   ),
@@ -1322,6 +1761,7 @@ void main() {
                         initialBody: 'short',
                         textColor: Colors.black,
                         hintColor: Colors.black38,
+                        linkColor: Colors.blue,
                         onChanged: (_) {},
                         autofocusFirst: true,
                       ),
@@ -1368,6 +1808,7 @@ void main() {
                         initialBody: '',
                         textColor: Colors.black,
                         hintColor: Colors.black38,
+                        linkColor: Colors.blue,
                         onChanged: (_) {},
                       ),
                     ),
@@ -1406,6 +1847,7 @@ void main() {
                   initialBody: '- [ ] first\n- [ ] second',
                   textColor: Colors.black,
                   hintColor: Colors.black38,
+                  linkColor: Colors.blue,
                   onChanged: (_) {},
                 ),
               ),
@@ -1430,5 +1872,95 @@ void main() {
         },
       );
     });
+  });
+
+  group('links in view mode', () {
+    tearDown(() {
+      LinkService.instance.debugOpen = null;
+    });
+
+    testWidgets(
+      'tapping directly on a link opens it instead of entering edit mode',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        final opened = <String>[];
+        LinkService.instance.debugOpen = (url) async {
+          opened.add(url);
+          return true;
+        };
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'See https://example.com now',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final paragraph =
+            tester.renderObject(find.byType(RichText).first) as RenderParagraph;
+        final fullText = 'See https://example.com now';
+        final linkStart = fullText.indexOf('https://example.com');
+        final linkEnd = linkStart + 'https://example.com'.length;
+        final boxes = paragraph.getBoxesForSelection(
+          TextSelection(baseOffset: linkStart, extentOffset: linkEnd),
+        );
+        final box = boxes.first;
+        final tapPoint = paragraph.localToGlobal(
+          Offset((box.left + box.right) / 2, (box.top + box.bottom) / 2),
+        );
+
+        await tester.tapAt(tapPoint);
+        await tester.pumpAndSettle();
+
+        expect(opened, ['https://example.com']);
+        expect(key.currentState!.isEditingBody, isFalse);
+      },
+    );
+
+    testWidgets(
+      'tapping plain text next to a link still enters edit mode as usual',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        LinkService.instance.debugOpen = (_) async => true;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'See https://example.com now',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final paragraph =
+            tester.renderObject(find.byType(RichText).first) as RenderParagraph;
+        final boxes = paragraph.getBoxesForSelection(
+          const TextSelection(baseOffset: 0, extentOffset: 3), // "See"
+        );
+        final box = boxes.first;
+        final tapPoint = paragraph.localToGlobal(
+          Offset((box.left + box.right) / 2, (box.top + box.bottom) / 2),
+        );
+
+        await tester.tapAt(tapPoint);
+        await tester.pumpAndSettle();
+
+        expect(key.currentState!.isEditingBody, isTrue);
+      },
+    );
   });
 }

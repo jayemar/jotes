@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/providers/theme_provider.dart';
 import 'package:jotes/screens/settings_screen.dart';
+import 'package:jotes/services/periodic_refresh_settings.dart';
 import 'package:jotes/services/snooze_settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -247,12 +248,80 @@ void main() {
         });
         await _pumpSettingsScreen(tester);
 
+        // The tile can start out below the ListView's build/cache extent
+        // now that there's more content above it (see
+        // _PeriodicRefreshSetting) - drag the list directly by its own key
+        // rather than find.byType(Scrollable), which also matches
+        // DropdownMenu's own hidden pre-built entries elsewhere on this
+        // screen and so can't identify the settings list unambiguously.
+        await tester.drag(
+          find.byKey(const Key('settings_list')),
+          const Offset(0, -600),
+        );
+        await tester.pumpAndSettle();
+
         final tile = find.byKey(const Key('autostart_setting'));
         expect(tile, findsOneWidget);
 
         await tester.tap(tile);
         await tester.pumpAndSettle();
         expect(opened, isTrue);
+      },
+    );
+  });
+
+  group('background refresh setting', () {
+    const periodicRefreshChannel = MethodChannel(
+      'com.jayemar.jotes/periodic_refresh',
+    );
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+    tearDown(() {
+      messenger.setMockMethodCallHandler(periodicRefreshChannel, null);
+    });
+
+    testWidgets('defaults to on', (tester) async {
+      messenger.setMockMethodCallHandler(
+        periodicRefreshChannel,
+        (call) async => null,
+      );
+      await _pumpSettingsScreen(tester);
+
+      final tile = tester.widget<SwitchListTile>(
+        find.byKey(const Key('periodic_refresh_setting')),
+      );
+      expect(tile.value, isTrue);
+    });
+
+    testWidgets(
+      'turning it off persists the choice and tells native to cancel the '
+      'schedule immediately, not just on next launch',
+      (tester) async {
+        String? lastMethod;
+        Object? lastArgs;
+        messenger.setMockMethodCallHandler(periodicRefreshChannel, (
+          call,
+        ) async {
+          lastMethod = call.method;
+          lastArgs = call.arguments;
+          return null;
+        });
+        await _pumpSettingsScreen(tester);
+
+        await tester.tap(find.byKey(const Key('periodic_refresh_setting')));
+        await tester.pumpAndSettle();
+
+        final tile = tester.widget<SwitchListTile>(
+          find.byKey(const Key('periodic_refresh_setting')),
+        );
+        expect(tile.value, isFalse);
+        expect(lastMethod, 'setPeriodicRefreshEnabled');
+        expect(lastArgs, false);
+        expect(
+          await PeriodicRefreshSettings.instance.isEnabled(),
+          isFalse,
+        );
       },
     );
   });

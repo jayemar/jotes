@@ -1,8 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
-import 'package:jotes/services/notification_service.dart';
 import 'package:jotes/services/widget_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 Note _note({
   required String id,
@@ -10,6 +8,7 @@ Note _note({
   String body = '',
   int colorIndex = 0,
   DateTime? reminderAt,
+  bool reminderResolved = false,
 }) {
   final now = DateTime(2026, 1, 1);
   return Note(
@@ -20,16 +19,11 @@ Note _note({
     reminderAt: reminderAt,
     created: now,
     updated: now,
+    reminderResolved: reminderResolved,
   );
 }
 
 void main() {
-  setUp(() {
-    // buildReminderListPayload checks NotificationService.isReminderResolved
-    // for overdue notes, which touches SharedPreferences.
-    SharedPreferences.setMockInitialValues({});
-  });
-
   group('WidgetService.buildReminderListPayload', () {
     final now = DateTime(2026, 7, 20, 12);
 
@@ -142,9 +136,9 @@ void main() {
         _note(
           id: 'resolved',
           reminderAt: now.subtract(const Duration(hours: 1)),
+          reminderResolved: true,
         ),
       ];
-      await NotificationService.instance.markReminderResolved('resolved');
 
       final payload = await WidgetService.buildReminderListPayload(
         notes,
@@ -161,11 +155,9 @@ void main() {
         _note(
           id: 'future-but-resolved',
           reminderAt: now.add(const Duration(hours: 1)),
+          reminderResolved: true,
         ),
       ];
-      await NotificationService.instance.markReminderResolved(
-        'future-but-resolved',
-      );
 
       final payload = await WidgetService.buildReminderListPayload(
         notes,
@@ -212,7 +204,7 @@ void main() {
         'title': 'Title',
         'body': 'Body text',
         'blocks': [
-          {'type': 'text', 'text': 'Body text'},
+          {'type': 'text', 'text': 'Body text', 'isLink': false},
         ],
         'colorIndex': 4,
         'reminderAtMillis': reminderAt.millisecondsSinceEpoch,
@@ -238,14 +230,57 @@ void main() {
       final json = WidgetService.buildSingleNoteJson(note);
 
       expect(json['blocks'], [
-        {'type': 'text', 'text': 'Intro'},
+        {'type': 'text', 'text': 'Intro', 'isLink': false},
         {
           'type': 'checklist',
           'checked': false,
           'text': 'Buy milk',
+          'isLink': false,
           'indent': 0,
         },
-        {'type': 'checklist', 'checked': true, 'text': 'Sub-item', 'indent': 1},
+        {
+          'type': 'checklist',
+          'checked': true,
+          'text': 'Sub-item',
+          'isLink': false,
+          'indent': 1,
+        },
+      ]);
+    });
+
+    test('a text block that is entirely a link has its markdown syntax '
+        'stripped to just the label, and isLink set - the widget can style '
+        'the whole block as a link since Glance has no way to style just '
+        'part of one', () {
+      final note = _note(
+        id: 'note-1',
+        body: '[jotes repo](https://example.com/jotes)',
+      );
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {'type': 'text', 'text': 'jotes repo', 'isLink': true},
+      ]);
+    });
+
+    test('a text block mixing a link with surrounding prose still has the '
+        'markdown stripped to its label, but isLink stays false - Glance '
+        'cannot color/underline just the link portion of a mixed line',
+        () {
+      final note = _note(
+        id: 'note-1',
+        body: 'See https://example.com for more.',
+      );
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {
+          'type': 'text',
+          'text': 'See https://example.com for more.',
+          'isLink': false,
+        },
       ]);
     });
   });

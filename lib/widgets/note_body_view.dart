@@ -10,6 +10,7 @@ import 'note_body_editor.dart'
         checklistIndentStepPx,
         maxChecklistIndent,
         parseBodyWithOffsets;
+import 'note_link_spans.dart';
 
 /// One block as rendered in view mode - wraps a [ParsedBlock] with a
 /// [GlobalKey] used only for the duration of a single drag gesture (see
@@ -99,6 +100,7 @@ class NoteBodyView extends StatelessWidget {
   final String body;
   final Color textColor;
   final Color hintColor;
+  final Color linkColor;
   final ValueChanged<int> onEnterEditAt;
   final ValueChanged<int> onToggle;
   final ValueChanged<int> onDelete;
@@ -109,6 +111,7 @@ class NoteBodyView extends StatelessWidget {
     required this.body,
     required this.textColor,
     required this.hintColor,
+    required this.linkColor,
     required this.onEnterEditAt,
     required this.onToggle,
     required this.onDelete,
@@ -158,14 +161,14 @@ class NoteBodyView extends StatelessWidget {
         itemBuilder: (context, segIndex) {
           final segment = segments[segIndex];
           return segment.isChecklistRun
-              ? _buildChecklistRun(viewBlocks, segment)
-              : _buildTextBlock(viewBlocks[segment.start]);
+              ? _buildChecklistRun(context, viewBlocks, segment)
+              : _buildTextBlock(context, viewBlocks[segment.start]);
         },
       ),
     );
   }
 
-  Widget _buildTextBlock(ViewBlock viewBlock) {
+  Widget _buildTextBlock(BuildContext context, ViewBlock viewBlock) {
     final parsed = viewBlock.parsed;
     final text = (parsed.block as TextBodyBlock).text;
     final textKey = GlobalKey();
@@ -184,15 +187,23 @@ class NoteBodyView extends StatelessWidget {
             : Text.rich(
                 key: textKey,
                 TextSpan(
-                  text: text,
-                  style: TextStyle(fontSize: 15, color: textColor),
+                  children: buildLinkSpans(
+                    text: text,
+                    baseStyle: TextStyle(fontSize: 15, color: textColor),
+                    linkColor: linkColor,
+                    onTapLink: (url) => openLink(context, url),
+                  ),
                 ),
               ),
       ),
     );
   }
 
-  Widget _buildChecklistRun(List<ViewBlock> viewBlocks, RenderSegment segment) {
+  Widget _buildChecklistRun(
+    BuildContext context,
+    List<ViewBlock> viewBlocks,
+    RenderSegment segment,
+  ) {
     // Resolves one drag-handle gesture's raw (dx, dy) into an absolute
     // (fromIndex, toIndex, newIndent) instruction for onDragCommit - the
     // position geometry lives here, where the run's rowKeys are in scope,
@@ -250,6 +261,7 @@ class NoteBodyView extends StatelessWidget {
             viewBlock: viewBlocks[i],
             textColor: textColor,
             hintColor: hintColor,
+            linkColor: linkColor,
             onToggle: () => onToggle(i),
             onDelete: () => onDelete(i),
             onDragEnd: (dx, dy) => handleDragEnd(i - segment.start, dx, dy),
@@ -264,6 +276,7 @@ class _ChecklistViewRow extends StatefulWidget {
   final ViewBlock viewBlock;
   final Color textColor;
   final Color hintColor;
+  final Color linkColor;
   final VoidCallback onToggle;
   final VoidCallback onDelete;
   // Total (dx, dy) since the drag-handle gesture started - see
@@ -279,6 +292,7 @@ class _ChecklistViewRow extends StatefulWidget {
     required this.viewBlock,
     required this.textColor,
     required this.hintColor,
+    required this.linkColor,
     required this.onToggle,
     required this.onDelete,
     required this.onDragEnd,
@@ -420,15 +434,19 @@ class _ChecklistViewRowState extends State<_ChecklistViewRow> {
                     : Text.rich(
                         key: _textKey,
                         TextSpan(
-                          text: block.text,
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: block.checked
-                                ? widget.hintColor
-                                : widget.textColor,
-                            decoration: block.checked
-                                ? TextDecoration.lineThrough
-                                : null,
+                          children: buildLinkSpans(
+                            text: block.text,
+                            baseStyle: TextStyle(
+                              fontSize: 15,
+                              color: block.checked
+                                  ? widget.hintColor
+                                  : widget.textColor,
+                              decoration: block.checked
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
+                            linkColor: widget.linkColor,
+                            onTapLink: (url) => openLink(context, url),
                           ),
                         ),
                       ),

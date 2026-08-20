@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/note.dart';
-import '../services/notification_service.dart';
 import 'note_body_editor.dart'
     show ChecklistBodyBlock, TextBodyBlock, checklistIndentStepPx, parseBody;
+import 'note_link_spans.dart';
 
 class NoteCard extends StatelessWidget {
   final Note note;
@@ -27,6 +27,10 @@ class NoteCard extends StatelessWidget {
     final isDark =
         ThemeData.estimateBrightnessForColor(color) == Brightness.dark;
     final textColor = isDark ? Colors.white : Colors.black87;
+    // Same fixed link-blue convention as note_editor_screen.dart's own
+    // linkColor - see its comment for why this doesn't derive from the
+    // note's own background color.
+    final linkColor = isDark ? Colors.lightBlueAccent : Colors.blue;
 
     return GestureDetector(
       onTap: onTap,
@@ -63,12 +67,24 @@ class NoteCard extends StatelessWidget {
                   const SizedBox(height: 6),
                 ],
                 if (note.body.isNotEmpty)
-                  _NoteBodyPreview(body: note.body, textColor: textColor),
+                  _NoteBodyPreview(
+                    body: note.body,
+                    textColor: textColor,
+                    linkColor: linkColor,
+                    // Links are only tappable outside selection mode - a
+                    // card's whole area is a toggle-selection target while
+                    // selecting (see the onTap passed in from
+                    // notes_screen.dart), and a link recognizer winning the
+                    // gesture arena over that would silently break
+                    // multi-select on any card whose preview happens to
+                    // contain one.
+                    linksTappable: !selectionMode,
+                  ),
                 if (note.reminderAt != null) ...[
                   const SizedBox(height: 8),
                   _ReminderChip(
-                    noteId: note.id,
                     reminderAt: note.reminderAt!,
+                    resolved: note.reminderResolved,
                     textColor: textColor,
                   ),
                 ],
@@ -100,8 +116,15 @@ class NoteCard extends StatelessWidget {
 class _NoteBodyPreview extends StatelessWidget {
   final String body;
   final Color textColor;
+  final Color linkColor;
+  final bool linksTappable;
 
-  const _NoteBodyPreview({required this.body, required this.textColor});
+  const _NoteBodyPreview({
+    required this.body,
+    required this.textColor,
+    required this.linkColor,
+    required this.linksTappable,
+  });
 
   static const _maxPreviewLines = 8;
 
@@ -117,15 +140,32 @@ class _NoteBodyPreview extends StatelessWidget {
       switch (block) {
         case ChecklistBodyBlock():
           children.add(
-            _ChecklistPreviewRow(block: block, textColor: textColor),
+            _ChecklistPreviewRow(
+              block: block,
+              textColor: textColor,
+              linkColor: linkColor,
+              linksTappable: linksTappable,
+            ),
           );
           linesUsed += 1;
         case TextBodyBlock():
           final remaining = _maxPreviewLines - linesUsed;
+          final baseStyle = TextStyle(
+            fontSize: 13,
+            color: textColor.withAlpha(220),
+          );
           children.add(
-            Text(
-              block.text,
-              style: TextStyle(fontSize: 13, color: textColor.withAlpha(220)),
+            Text.rich(
+              TextSpan(
+                children: linksTappable
+                    ? buildLinkSpans(
+                        text: block.text,
+                        baseStyle: baseStyle,
+                        linkColor: linkColor,
+                        onTapLink: (url) => openLink(context, url),
+                      )
+                    : [TextSpan(text: block.text, style: baseStyle)],
+              ),
               maxLines: remaining,
               overflow: TextOverflow.ellipsis,
             ),
@@ -145,11 +185,23 @@ class _NoteBodyPreview extends StatelessWidget {
 class _ChecklistPreviewRow extends StatelessWidget {
   final ChecklistBodyBlock block;
   final Color textColor;
+  final Color linkColor;
+  final bool linksTappable;
 
-  const _ChecklistPreviewRow({required this.block, required this.textColor});
+  const _ChecklistPreviewRow({
+    required this.block,
+    required this.textColor,
+    required this.linkColor,
+    required this.linksTappable,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final baseStyle = TextStyle(
+      fontSize: 13,
+      color: textColor.withAlpha(block.checked ? 140 : 220),
+      decoration: block.checked ? TextDecoration.lineThrough : null,
+    );
     return Padding(
       padding: EdgeInsets.only(
         left: block.indent * checklistIndentStepPx,
@@ -170,12 +222,16 @@ class _ChecklistPreviewRow extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(
-              block.text,
-              style: TextStyle(
-                fontSize: 13,
-                color: textColor.withAlpha(block.checked ? 140 : 220),
-                decoration: block.checked ? TextDecoration.lineThrough : null,
+            child: Text.rich(
+              TextSpan(
+                children: linksTappable
+                    ? buildLinkSpans(
+                        text: block.text,
+                        baseStyle: baseStyle,
+                        linkColor: linkColor,
+                        onTapLink: (url) => openLink(context, url),
+                      )
+                    : [TextSpan(text: block.text, style: baseStyle)],
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -188,20 +244,22 @@ class _ChecklistPreviewRow extends StatelessWidget {
 }
 
 /// Three states, not two: green while [reminderAt] is still in the future
-/// (untriggered); amber once it's passed but nothing's been done about it
-/// yet (Dismiss/Snooze - see NotificationService.isReminderResolved); red
-/// once the user has acted on it (complete). A future reminder is always
-/// green without needing the resolved check at all - schedule() already
-/// clears any stale resolved flag when a note's next cycle begins, so
-/// "still in the future" and "resolved" never meaningfully coexist.
+/// (untriggered); amber once it's passed but [resolved] is still false
+/// (Dismiss/Snooze - see Note.reminderResolved); red once the user has
+/// acted on it (complete). A future reminder is always green without
+/// needing to check [resolved] at all - a fresh reminder cycle always
+/// starts with reminderResolved: false (see Note.reminderResolved's own
+/// doc comment), so "still in the future" and "resolved" never
+/// meaningfully coexist. Synced, so this reflects Dismiss/Snooze acted on
+/// from any device, not just this one.
 class _ReminderChip extends StatelessWidget {
-  final String noteId;
   final DateTime reminderAt;
+  final bool resolved;
   final Color textColor;
 
   const _ReminderChip({
-    required this.noteId,
     required this.reminderAt,
+    required this.resolved,
     required this.textColor,
   });
 
@@ -212,18 +270,9 @@ class _ReminderChip extends StatelessWidget {
       return _chip(color: Colors.green, icon: Icons.alarm);
     }
 
-    return FutureBuilder<bool>(
-      future: NotificationService.instance.isReminderResolved(noteId),
-      builder: (context, snapshot) {
-        // Defaults to "not yet resolved" while the check is still pending -
-        // safer to briefly under-claim completion than to flash red before
-        // the real answer comes back.
-        final resolved = snapshot.data ?? false;
-        return _chip(
-          color: resolved ? Colors.red : Colors.amber,
-          icon: Icons.alarm_off,
-        );
-      },
+    return _chip(
+      color: resolved ? Colors.red : Colors.amber,
+      icon: Icons.alarm_off,
     );
   }
 

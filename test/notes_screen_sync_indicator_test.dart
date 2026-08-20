@@ -5,6 +5,7 @@ import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/providers/sync_provider.dart';
 import 'package:jotes/screens/notes_screen.dart';
+import 'package:jotes/screens/sync_settings_screen.dart';
 
 /// Same in-memory test double pattern as notes_screen_search_test.dart, but
 /// for notesProvider only - syncProvider is overridden separately per test
@@ -73,5 +74,16 @@ void main() {
     await _pumpNotesScreen(tester, const SyncState(status: SyncStatus.error));
 
     expect(_indicatorColor(tester), Colors.red);
+  });
+
+  testWidgets('tapping the sync indicator opens the sync settings screen', (
+    tester,
+  ) async {
+    await _pumpNotesScreen(tester, SyncState.initial);
+
+    await tester.tap(find.byKey(const Key('sync_indicator_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SyncSettingsScreen), findsOneWidget);
   });
 }

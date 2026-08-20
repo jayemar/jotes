@@ -56,17 +56,31 @@ Future<void> showReminderPopup(BuildContext context, WidgetRef ref, Note note) {
             TextButton(
               key: const Key('reminder_popup_dismiss'),
               onPressed: () async {
-                // Not fatal - see addOrUpdate in notes_provider.dart for
-                // the same reasoning; the popup must still close even if
-                // the tray notification fails to cancel.
+                // Explicit cancel first, not left to addOrUpdate's own
+                // unconditional one below (which would cover it too, but
+                // only for a NotesNotifier that actually calls through to
+                // it - a test override might not) - same reasoning as
+                // _snooze's own explicit cancel.
                 try {
                   await NotificationService.instance.cancel(
                     note.notificationId,
                   );
                 } catch (_) {}
-                await NotificationService.instance.markReminderResolved(
-                  note.id,
-                );
+                // Persisting reminderResolved: true (rather than the old
+                // local-only markReminderResolved) is what makes Dismiss
+                // sync: PbService.upsert pushes it to the server, the
+                // realtime subscription carries it to every other device,
+                // and SyncNotifier._handleRemoteEvent already cancels each
+                // of their tray notifications on any note update - see
+                // Note.reminderResolved's own doc comment.
+                await ref
+                    .read(notesProvider.notifier)
+                    .addOrUpdate(
+                      note.copyWith(
+                        reminderResolved: true,
+                        updated: DateTime.now(),
+                      ),
+                    );
                 if (dialogContext.mounted) Navigator.pop(dialogContext);
               },
               child: const Text('Dismiss'),
@@ -99,10 +113,16 @@ Future<void> _snooze(BuildContext context, WidgetRef ref, Note note) async {
   // Marked resolved as soon as the old notification is cancelled, not only
   // once a new time is actually picked below - if the user backs out of
   // the pickers without choosing one, the old cycle is still done and
-  // shouldn't reappear on a later restart. (If they do pick a new time,
-  // schedule() clears this again for the fresh cycle - see its own
-  // comment.)
-  await NotificationService.instance.markReminderResolved(note.id);
+  // shouldn't reappear on a later restart or resync. (If they do pick a
+  // new time, the addOrUpdate below sets reminderResolved back to false
+  // for the fresh cycle.) Synced (not the old local-only
+  // markReminderResolved) for the same cross-device reason as the Dismiss
+  // button above - see Note.reminderResolved's own doc comment.
+  await ref
+      .read(notesProvider.notifier)
+      .addOrUpdate(
+        note.copyWith(reminderResolved: true, updated: DateTime.now()),
+      );
 
   if (!context.mounted) return;
   final now = DateTime.now();
@@ -133,6 +153,10 @@ Future<void> _snooze(BuildContext context, WidgetRef ref, Note note) async {
   await ref
       .read(notesProvider.notifier)
       .addOrUpdate(
-        note.copyWith(reminderAt: newReminderAt, updated: DateTime.now()),
+        note.copyWith(
+          reminderAt: newReminderAt,
+          reminderResolved: false,
+          updated: DateTime.now(),
+        ),
       );
 }

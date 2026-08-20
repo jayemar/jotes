@@ -58,6 +58,22 @@ class Note {
   /// built from [Note.fromMap].
   final bool deleted;
 
+  /// Whether the user has explicitly acted on (Dismissed or Snoozed) the
+  /// current reminder cycle - see NotificationService's Dismiss/Snooze
+  /// handling. Synced like any other field (unlike the separate, genuinely
+  /// per-device "handled" bookkeeping in NotificationService, which tracks
+  /// each device's own independent alarm delivery) so that resolving a
+  /// reminder on one device clears it everywhere: acting on this note
+  /// elsewhere pushes reminderResolved up, the realtime subscription
+  /// carries it to every other device, and SyncNotifier._handleRemoteEvent
+  /// already cancels that device's own tray notification on any note
+  /// update, resolved or not. Meaningless (and always false) once
+  /// [reminderAt] is null or in the future - only an already-fired
+  /// reminder can be "resolved" - and reset to false whenever a fresh
+  /// [reminderAt] is set (see NoteEditorScreen._pickReminder and the
+  /// Snooze paths), so a reused reminder starts its new cycle unresolved.
+  final bool reminderResolved;
+
   const Note({
     required this.id,
     this.title = '',
@@ -67,6 +83,7 @@ class Note {
     required this.created,
     required this.updated,
     this.deleted = false,
+    this.reminderResolved = false,
   });
 
   bool get isEmpty => title.isEmpty && body.isEmpty && reminderAt == null;
@@ -79,6 +96,7 @@ class Note {
     int? colorIndex,
     Object? reminderAt = _sentinel,
     DateTime? updated,
+    bool? reminderResolved,
   }) {
     return Note(
       id: id,
@@ -89,6 +107,7 @@ class Note {
           identical(reminderAt, _sentinel) ? this.reminderAt : reminderAt as DateTime?,
       created: created,
       updated: updated ?? this.updated,
+      reminderResolved: reminderResolved ?? this.reminderResolved,
     );
   }
 
@@ -100,6 +119,7 @@ class Note {
         'reminder_at': reminderAt?.millisecondsSinceEpoch,
         'created': created.millisecondsSinceEpoch,
         'updated': updated.millisecondsSinceEpoch,
+        'reminder_resolved': reminderResolved,
       };
 
   factory Note.fromMap(Map<String, dynamic> map) => Note(
@@ -112,6 +132,7 @@ class Note {
             : null,
         created: DateTime.fromMillisecondsSinceEpoch(map['created'] as int),
         updated: DateTime.fromMillisecondsSinceEpoch(map['updated'] as int),
+        reminderResolved: (map['reminder_resolved'] as bool?) ?? false,
       );
 
   Map<String, dynamic> toPocketBase() => {
@@ -123,6 +144,7 @@ class Note {
         // one up (e.g. from mergeSync's local-is-newer branch) must always
         // clear a stale remote tombstone rather than leave it set.
         'deleted': false,
+        'reminder_resolved': reminderResolved,
       };
 
   factory Note.fromPocketBase(Map<String, dynamic> r) {
@@ -143,8 +165,37 @@ class Note {
           ? DateTime.parse(r['updated'] as String).toLocal()
           : now,
       deleted: r['deleted'] == true,
+      reminderResolved: r['reminder_resolved'] == true,
     );
   }
 }
 
 const Object _sentinel = Object();
+
+/// Which of [notes] have a reminder that should still be surfaced to the
+/// user, sorted oldest-first - an overdue reminder that's been sitting the
+/// longest sorts above one that just fired, and both sort above anything
+/// still upcoming. Shared by WidgetService.buildReminderListPayload (the
+/// home-screen widget) and RemindersScreen (its in-app equivalent, reached
+/// from the drawer), so both always agree on what counts as "active or
+/// pending": an upcoming reminder (not yet fired) always qualifies; an
+/// already-fired one only while still unresolved (see
+/// [Note.reminderResolved]'s own doc comment) - a reminder exactly at
+/// [now] (defaults to the real current time) counts as already fired, not
+/// upcoming.
+List<Note> notesWithActiveOrPendingReminders(
+  List<Note> notes, {
+  DateTime? now,
+}) {
+  final effectiveNow = now ?? DateTime.now();
+  final withReminders = notes.where((n) => n.reminderAt != null).toList()
+    ..sort((a, b) => a.reminderAt!.compareTo(b.reminderAt!));
+
+  final result = <Note>[];
+  for (final note in withReminders) {
+    final isOverdue = !note.reminderAt!.isAfter(effectiveNow);
+    if (isOverdue && note.reminderResolved) continue;
+    result.add(note);
+  }
+  return result;
+}

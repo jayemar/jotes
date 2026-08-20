@@ -62,6 +62,150 @@ ChecklistLineMatch? matchChecklistLine(String lineAfterIndent) {
   );
 }
 
+/// Generalizes [ChecklistLineMatch] to any of the three list-marker types
+/// this editor recognizes (checklist, bullet, numbered) - used by
+/// [toggleLineMarker], which only needs to know "is this line already some
+/// kind of list item, and if so, how much of it is marker versus text,"
+/// not which specific kind.
+class LineMarkerMatch {
+  final String text;
+  final int rawPrefixLength;
+  LineMarkerMatch(this.text, this.rawPrefixLength);
+}
+
+/// Classifies [lineAfterIndent] (indent already stripped, same convention
+/// as [matchChecklistLine]) as whichever list-marker type is present, if
+/// any.
+LineMarkerMatch? matchAnyLineMarker(String lineAfterIndent) {
+  final checklist = matchChecklistLine(lineAfterIndent);
+  if (checklist != null) {
+    return LineMarkerMatch(checklist.text, checklist.rawPrefixLength);
+  }
+  final bullet = _bulletLinePattern.firstMatch(lineAfterIndent);
+  if (bullet != null) {
+    final text = bullet.group(2) ?? '';
+    return LineMarkerMatch(text, lineAfterIndent.length - text.length);
+  }
+  final numbered = _numberedLinePattern.firstMatch(lineAfterIndent);
+  if (numbered != null) {
+    final text = numbered.group(2) ?? '';
+    return LineMarkerMatch(text, lineAfterIndent.length - text.length);
+  }
+  return null;
+}
+
+/// Toggles the line containing [cursorOffset] in [text] between plain text
+/// and a list item using [marker] ("- [ ] " for a checklist item, "- " for
+/// a bullet) - the core logic behind the toolbar's checkbox/list tools (see
+/// NoteBodyEditorState.toggleChecklistLine/toggleBulletLine). Already using
+/// that exact marker removes it, back to plain text; already using a
+/// *different* marker (e.g. tapping the bullet tool on a checklist line)
+/// switches it over rather than stacking a second one; otherwise the
+/// marker is simply added. The cursor stays anchored to the same character
+/// of the line's own text content (past whatever marker precedes it), not
+/// a raw offset that a changed marker length would otherwise leave
+/// pointing at the wrong character.
+TextEditingValue toggleLineMarker({
+  required String text,
+  required int cursorOffset,
+  required String marker,
+}) {
+  // lastIndexOf's start argument can't be negative - a cursor at the very
+  // beginning of the text (offset 0) trivially has its line start there
+  // too, with nothing before it to search.
+  final lineStart = cursorOffset <= 0
+      ? 0
+      : text.lastIndexOf('\n', cursorOffset - 1) + 1;
+  final nextNewline = text.indexOf('\n', lineStart);
+  final lineEnd = nextNewline == -1 ? text.length : nextNewline;
+  final line = text.substring(lineStart, lineEnd);
+  final leadingSpaces = _leadingSpacesPattern.firstMatch(line)!.group(1) ?? '';
+  final lineAfterIndent = line.substring(leadingSpaces.length);
+  final existing = matchAnyLineMarker(lineAfterIndent);
+  final existingText = existing?.text ?? lineAfterIndent;
+  final existingMarkerLength = existing?.rawPrefixLength ?? 0;
+
+  final removingThisMarker =
+      existing != null && lineAfterIndent.startsWith(marker);
+  final newLineAfterIndent = removingThisMarker
+      ? existingText
+      : '$marker$existingText';
+  final newMarkerLength = removingThisMarker ? 0 : marker.length;
+
+  final cursorInText =
+      (cursorOffset - lineStart - leadingSpaces.length - existingMarkerLength)
+          .clamp(0, existingText.length);
+  final newCursor =
+      lineStart + leadingSpaces.length + newMarkerLength + cursorInText;
+
+  final newText = text.replaceRange(
+    lineStart,
+    lineEnd,
+    '$leadingSpaces$newLineAfterIndent',
+  );
+  return TextEditingValue(
+    text: newText,
+    selection: TextSelection.collapsed(offset: newCursor),
+  );
+}
+
+/// Swaps the line containing [cursorOffset] in [text] with the adjacent
+/// line in [direction] (-1 for up, +1 for down) - the core logic behind
+/// the toolbar's move-line tools (see NoteBodyEditorState.moveLineUp/
+/// moveLineDown). Returns null if there's no adjacent line to swap with in
+/// that direction (already the first/last line). The cursor stays at the
+/// same character offset *within* the moved line's own text, following it
+/// to its new position rather than staying at a raw offset that would now
+/// land in whatever line ended up there instead.
+TextEditingValue? swapLine({
+  required String text,
+  required int cursorOffset,
+  required int direction,
+}) {
+  // lastIndexOf's start argument can't be negative - a cursor at the very
+  // beginning of the text (offset 0) trivially has its line start there
+  // too, with nothing before it to search.
+  final lineStart = cursorOffset <= 0
+      ? 0
+      : text.lastIndexOf('\n', cursorOffset - 1) + 1;
+  final nextNewline = text.indexOf('\n', lineStart);
+  final lineEnd = nextNewline == -1 ? text.length : nextNewline;
+  final cursorInLine = cursorOffset - lineStart;
+
+  final int otherStart;
+  final int otherEnd;
+  if (direction < 0) {
+    if (lineStart == 0) return null;
+    otherEnd = lineStart - 1; // the '\n' just before this line
+    otherStart = text.lastIndexOf('\n', otherEnd - 1) + 1;
+  } else {
+    if (lineEnd == text.length) return null;
+    otherStart = lineEnd + 1; // just past the '\n' after this line
+    final afterNewline = text.indexOf('\n', otherStart);
+    otherEnd = afterNewline == -1 ? text.length : afterNewline;
+  }
+
+  final thisLine = text.substring(lineStart, lineEnd);
+  final otherLine = text.substring(otherStart, otherEnd);
+
+  final String newText;
+  final int newCursor;
+  if (direction < 0) {
+    // otherLine, '\n', thisLine -> thisLine, '\n', otherLine
+    newText = text.replaceRange(otherStart, lineEnd, '$thisLine\n$otherLine');
+    newCursor = otherStart + cursorInLine;
+  } else {
+    // thisLine, '\n', otherLine -> otherLine, '\n', thisLine
+    newText = text.replaceRange(lineStart, otherEnd, '$otherLine\n$thisLine');
+    newCursor = lineStart + otherLine.length + 1 + cursorInLine;
+  }
+
+  return TextEditingValue(
+    text: newText,
+    selection: TextSelection.collapsed(offset: newCursor),
+  );
+}
+
 /// Removes a just-emptied list marker entirely, leaving a blank line where
 /// the item was - built from [oldText], discarding the Enter keypress
 /// entirely, rather than from the already-"\n"-inserted new text, which
@@ -371,16 +515,26 @@ class NoteBodyEditor extends StatefulWidget {
   final String initialBody;
   final Color textColor;
   final Color hintColor;
+  final Color linkColor;
   final ValueChanged<String> onChanged;
   final bool autofocusFirst;
+  // Fired on every view/edit mode transition - separate from [onChanged],
+  // which also marks the note dirty and (re)starts autosave (see
+  // NoteEditorScreen._markDirty), neither of which switching modes alone
+  // should trigger. Lets a parent toolbar (see NoteEditorScreen's move-up/
+  // move-down buttons) stay in sync with [NoteBodyEditorState.isEditingBody]
+  // as soon as it changes, rather than only on the next unrelated rebuild.
+  final VoidCallback? onModeChanged;
 
   const NoteBodyEditor({
     super.key,
     required this.initialBody,
     required this.textColor,
     required this.hintColor,
+    required this.linkColor,
     required this.onChanged,
     this.autofocusFirst = false,
+    this.onModeChanged,
   });
 
   @override
@@ -439,6 +593,7 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
   void _onEditFocusChanged() {
     if (_mode == _Mode.edit && !_editFocusNode.hasFocus) {
       setState(() => _mode = _Mode.view);
+      widget.onModeChanged?.call();
     }
   }
 
@@ -461,7 +616,14 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _editFocusNode.requestFocus();
     });
+    widget.onModeChanged?.call();
   }
+
+  /// Switches into edit mode with the cursor at the very start of the body
+  /// and gives it focus - called when Enter is pressed in the title field
+  /// (see NoteEditorScreen), so title -> body flows like tabbing to the next
+  /// field rather than dismissing the keyboard.
+  void focusBody() => _enterEditMode(0);
 
   /// Returns to view mode without saving anything further (there's
   /// nothing to save - [_onEditChanged] already keeps [_rawBody] current
@@ -472,6 +634,7 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     if (_mode != _Mode.edit) return;
     _editFocusNode.unfocus();
     setState(() => _mode = _Mode.view);
+    widget.onModeChanged?.call();
   }
 
   void _onEditChanged(String value) {
@@ -525,12 +688,76 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
   /// mode. Exposed for a parent toolbar button via
   /// `GlobalKey<NoteBodyEditorState>`. Always appends at the very end,
   /// not at any current cursor position.
-  void addChecklistItem() {
+  void addChecklistItem() => _appendItem('- [ ] ');
+
+  /// Same as [addChecklistItem], but appends a plain bullet ("- ") rather
+  /// than a checkbox - exposed for the toolbar's "add list item" button,
+  /// alongside "add checklist item".
+  void addBulletItem() => _appendItem('- ');
+
+  void _appendItem(String marker) {
     final needsNewline = _rawBody.isNotEmpty && !_rawBody.endsWith('\n');
-    final newBody = '$_rawBody${needsNewline ? '\n' : ''}- [ ] ';
+    final newBody = '$_rawBody${needsNewline ? '\n' : ''}$marker';
     setState(() => _rawBody = newBody);
     widget.onChanged(_rawBody);
     _enterEditMode(newBody.length);
+  }
+
+  /// Toggles whether the line the cursor is currently on is a checklist
+  /// item (see [toggleLineMarker]) - falls back to appending a brand-new
+  /// empty checklist item at the end (the old, mode-independent behavior -
+  /// see [addChecklistItem]) when not currently editing a specific line,
+  /// since there's no "current line" to toggle without an active cursor.
+  /// Exposed for the toolbar's checkbox button via
+  /// `GlobalKey<NoteBodyEditorState>`.
+  void toggleChecklistLine() => _toggleCurrentLine('- [ ] ');
+
+  /// Same as [toggleChecklistLine], but for a plain bullet ("- ") -
+  /// exposed for the toolbar's list button.
+  void toggleBulletLine() => _toggleCurrentLine('- ');
+
+  void _toggleCurrentLine(String marker) {
+    if (_mode != _Mode.edit) {
+      _appendItem(marker);
+      return;
+    }
+    final selection = _editController.selection;
+    if (!selection.isValid) return;
+
+    final newValue = toggleLineMarker(
+      text: _editController.text,
+      cursorOffset: selection.baseOffset,
+      marker: marker,
+    );
+    _rawBody = newValue.text;
+    setState(() => _editController.value = newValue);
+    widget.onChanged(_rawBody);
+  }
+
+  /// Moves the line the cursor is currently on up/down past its neighbor
+  /// (see [swapLine]) - a no-op while not editing a specific line (see
+  /// [_toggleCurrentLine]'s same reasoning) or already at the first/last
+  /// line. Exposed for the toolbar's move-up/move-down buttons via
+  /// `GlobalKey<NoteBodyEditorState>`.
+  void moveLineUp() => _moveLine(-1);
+
+  /// See [moveLineUp].
+  void moveLineDown() => _moveLine(1);
+
+  void _moveLine(int direction) {
+    if (_mode != _Mode.edit) return;
+    final selection = _editController.selection;
+    if (!selection.isValid) return;
+
+    final newValue = swapLine(
+      text: _editController.text,
+      cursorOffset: selection.baseOffset,
+      direction: direction,
+    );
+    if (newValue == null) return;
+    _rawBody = newValue.text;
+    setState(() => _editController.value = newValue);
+    widget.onChanged(_rawBody);
   }
 
   void _toggleChecked(int index) {
@@ -680,6 +907,7 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
       body: _rawBody,
       textColor: widget.textColor,
       hintColor: widget.hintColor,
+      linkColor: widget.linkColor,
       onEnterEditAt: _enterEditMode,
       onToggle: _toggleChecked,
       onDelete: _deleteBlock,

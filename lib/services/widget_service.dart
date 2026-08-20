@@ -5,7 +5,7 @@ import 'package:home_widget/home_widget.dart';
 import '../models/note.dart';
 import '../widgets/note_body_editor.dart'
     show BodyBlock, ChecklistBodyBlock, TextBodyBlock, parseBody;
-import 'notification_service.dart';
+import '../widgets/note_links.dart';
 
 const _singleNoteReceiver = 'com.jayemar.jotes.SingleNoteWidgetReceiver';
 const _reminderListReceiver = 'com.jayemar.jotes.ReminderListWidgetReceiver';
@@ -94,44 +94,31 @@ class WidgetService {
     }
   }
 
-  /// Every note with a reminder set that the user hasn't resolved yet
-  /// (Dismiss or Snooze - see NotificationService.isReminderResolved),
-  /// sorted oldest-first - an overdue reminder that's been sitting the
-  /// longest sorts above one that just fired, and both sort above anything
-  /// still upcoming, forming a single chronological list with no
-  /// special-casing needed. `isOverdue` mirrors NoteCard's own
-  /// _ReminderChip convention (note_card.dart) so the widget can match its
-  /// red/green styling.
-  ///
-  /// Only overdue notes are checked against resolved state - an upcoming
-  /// reminder hasn't fired yet, so "resolved" doesn't apply to it (and
-  /// schedule() clears any stale resolution when a note's next cycle
-  /// begins anyway - see its own comment), so this always shows it
-  /// regardless.
+  /// The reminders list payload for the home-screen widget - `isOverdue`
+  /// mirrors NoteCard's own _ReminderChip convention (note_card.dart) so
+  /// the widget can match its red/green styling. Which notes qualify (and
+  /// their sort order) comes from [notesWithActiveOrPendingReminders] -
+  /// see its own doc comment - shared with RemindersScreen's in-app
+  /// equivalent so both always agree.
   @visibleForTesting
   static Future<List<Map<String, dynamic>>> buildReminderListPayload(
     List<Note> notes, {
     DateTime? now,
   }) async {
     final effectiveNow = now ?? DateTime.now();
-    final withReminders = notes.where((n) => n.reminderAt != null).toList()
-      ..sort((a, b) => a.reminderAt!.compareTo(b.reminderAt!));
-
-    final payload = <Map<String, dynamic>>[];
-    for (final note in withReminders) {
-      final isOverdue = !note.reminderAt!.isAfter(effectiveNow);
-      if (isOverdue &&
-          await NotificationService.instance.isReminderResolved(note.id)) {
-        continue;
-      }
-      payload.add({
-        'id': note.id,
-        'title': note.title,
-        'reminderAtMillis': note.reminderAt!.millisecondsSinceEpoch,
-        'isOverdue': isOverdue,
-      });
-    }
-    return payload;
+    final qualifying = notesWithActiveOrPendingReminders(
+      notes,
+      now: effectiveNow,
+    );
+    return [
+      for (final note in qualifying)
+        {
+          'id': note.id,
+          'title': note.title,
+          'reminderAtMillis': note.reminderAt!.millisecondsSinceEpoch,
+          'isOverdue': !note.reminderAt!.isAfter(effectiveNow),
+        },
+    ];
   }
 
   /// Also called directly from widget_note_picker_screen.dart when a note
@@ -157,9 +144,28 @@ class WidgetService {
     ChecklistBodyBlock() => {
       'type': 'checklist',
       'checked': block.checked,
-      'text': block.text,
+      ..._linkAwareText(block.text),
       'indent': block.indent,
     },
-    TextBodyBlock() => {'type': 'text', 'text': block.text},
+    TextBodyBlock() => {'type': 'text', ..._linkAwareText(block.text)},
   };
+
+  /// Markdown links can't render as true inline styled/clickable spans in
+  /// the Android widget - Jetpack Glance's Text only takes one plain
+  /// String + one TextStyle per call (no AnnotatedString/TextSpan
+  /// equivalent), and RemoteViews has no span-level click target at all,
+  /// only whole-view clicks (see SingleNoteWidget.kt) - so this strips
+  /// link syntax down to just its display label (matching what
+  /// buildLinkSpans shows in-app) always, and additionally flags whether
+  /// the *entire* text is nothing but a single link, the one case Kotlin
+  /// can still style as a whole (link-blue, underlined) rather than
+  /// leaving raw "[label](url)"/bare URLs looking like oddly-formatted
+  /// plain text.
+  static Map<String, dynamic> _linkAwareText(String text) {
+    final segments = parseLinks(text);
+    return {
+      'text': segments.map((s) => s.text).join(),
+      'isLink': segments.length == 1 && segments.single.isLink,
+    };
+  }
 }

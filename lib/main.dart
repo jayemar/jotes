@@ -15,8 +15,10 @@ import 'screens/widget_note_picker_screen.dart';
 import 'services/db_service.dart';
 import 'services/notification_service.dart';
 import 'services/pb_service.dart';
+import 'services/periodic_refresh_settings.dart';
 import 'services/share_intent_service.dart';
 import 'services/unifiedpush_service.dart';
+import 'services/widget_service.dart';
 import 'theme/app_text_styles.dart';
 import 'widgets/reminder_popup.dart';
 
@@ -48,6 +50,24 @@ String? noteIdFromWidgetUri(Uri? uri) {
 /// the same way on BOOT_COMPLETED, passing `--boot-restore` instead, so an
 /// unresolved overdue reminder reappears without the user opening the app
 /// first - see NotificationService.restoreUnresolvedReminders.
+///
+/// PeriodicRefreshWorker (Kotlin) does the same on a recurring WorkManager
+/// schedule (roughly every 15 minutes, the shortest interval Android's
+/// WorkManager allows for periodic work), passing `--periodic-refresh` -
+/// covers two gaps a sync/push/boot-triggered refresh alone leaves: the
+/// widget's upcoming/overdue split is only ever recomputed when something
+/// pushes fresh data to it, so a reminder can sit displayed as "upcoming"
+/// well past its own fire time until the next unrelated sync happens to
+/// touch it; and restoreUnresolvedReminders() only ever runs once at
+/// startup, so a reminder that fires normally but then gets cleared from
+/// the notification shade some other way than tapping its own
+/// Dismiss/Snooze action (a swipe, "Clear all", the shade being wiped by a
+/// reboot) stays silently gone until the next app open. Deliberately
+/// local-only (no PbService/mergeSync call) - both gaps are about
+/// re-deriving state from what's already on this device against the
+/// current time, not about fetching anything new from the server; actual
+/// cross-device changes already have their own push path (see
+/// UnifiedPushService).
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -81,6 +101,13 @@ void main(List<String> args) async {
     return;
   }
 
+  if (args.contains('--periodic-refresh')) {
+    await NotificationService.instance.initialize(requestPermissions: false);
+    await NotificationService.instance.restoreUnresolvedReminders();
+    await WidgetService.instance.syncAll(await DbService.instance.getAll());
+    return;
+  }
+
   await UnifiedPushService.instance.initialize();
 
   if (args.contains('--unifiedpush-bg')) {
@@ -91,6 +118,12 @@ void main(List<String> args) async {
 
   await NotificationService.instance.initialize();
   ShareIntentService.instance.initialize();
+  // Syncs native's WorkManager schedule to whatever the user last chose in
+  // Settings (see PeriodicRefreshSettings) - a fresh install has never told
+  // native anything, and an app update's native side starts with no memory
+  // of a schedule from before either, so this has to run on every genuine
+  // launch rather than only when the setting actually changes.
+  unawaited(PeriodicRefreshSettings.instance.applyToNative());
   // Once per genuine app launch, not from the headless push path above (no
   // reason to re-alert the user from a background pocket-buzz wake) and not
   // from sync's own reconnect/push-driven mergeSync (which would otherwise

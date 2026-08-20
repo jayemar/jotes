@@ -1,6 +1,7 @@
 import 'db_service.dart';
 import 'notification_service.dart';
 import 'pb_service.dart';
+import 'snooze_settings.dart';
 import 'widget_service.dart';
 
 /// One-time reconciliation between local and remote storage: newer-wins by
@@ -14,6 +15,13 @@ import 'widget_service.dart';
 /// means doing this same full reconciliation rather than a targeted update.
 Future<void> mergeSync() async {
   if (!PbService.instance.isLoggedIn) return;
+  await PbService.instance.refreshAuth();
+  try {
+    await SnoozeSettings.instance.pullFromServer();
+  } catch (_) {
+    // Not fatal - see below for the same reasoning; the note sync this
+    // function exists for must proceed regardless.
+  }
 
   final local = await DbService.instance.getAll();
   final localById = {for (final n in local) n.id: n};
@@ -25,8 +33,19 @@ Future<void> mergeSync() async {
     if (l == null || l.updated.isBefore(r.updated)) {
       if (r.deleted) {
         await DbService.instance.delete(r.id);
+        try {
+          await NotificationService.instance.cancel(r.notificationId);
+        } catch (_) {
+          // Not fatal - the note is already deleted either way.
+        }
       } else {
         await DbService.instance.upsert(r);
+        // Only touches this note's notification if its reminder actually
+        // changed (see reconcile's own doc comment) - without this, a
+        // reminder change pulled in by a full reconciliation (e.g. this
+        // device was offline when it happened) would silently never reach
+        // this device's own alarm/tray state at all.
+        await NotificationService.instance.reconcile(l, r);
       }
     }
   }

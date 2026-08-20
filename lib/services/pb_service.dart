@@ -18,6 +18,27 @@ class PbService {
   String? get userEmail =>
       _client?.authStore.record?.data['email'] as String?;
 
+  /// The current user's own raw auth-record fields (email, and any custom
+  /// ones added via a users-collection migration, e.g. SnoozeSettings) -
+  /// null if not logged in. This record is refreshed on every sync (see
+  /// refreshAuth, called from mergeSync), so a custom field changed on
+  /// another device shows up here without a separate fetch.
+  Map<String, dynamic>? get userData => _client?.authStore.record?.data;
+
+  /// Updates the current user's own auth record with [data] - a partial
+  /// patch (PocketBase's own update() semantics), not a full replace, so
+  /// only the fields actually passed change. Used for account-wide
+  /// settings that should follow the user across devices rather than stay
+  /// per-device (see SnoozeSettings) - notes have their own equivalent via
+  /// [upsert] below.
+  Future<void> updateUserData(Map<String, dynamic> data) async {
+    if (!isLoggedIn) return;
+    await _client!.collection('users').update(
+      _client!.authStore.record!.id,
+      body: data,
+    );
+  }
+
   Future<AsyncAuthStore> _buildAuthStore(SharedPreferences prefs) async {
     return AsyncAuthStore(
       save: (data) async => prefs.setString(_authPrefsKey, data),
@@ -60,6 +81,25 @@ class PbService {
       'passwordConfirm': password,
     });
     await login(email, password);
+  }
+
+  /// Renews the current session, extending its expiry - PocketBase issues
+  /// auth tokens with a fixed TTL (~14 days by default) and this app never
+  /// otherwise touches the server between logins, so without this a token
+  /// would silently expire and log the user out just from not having
+  /// opened the app in a while. Called on every sync (see mergeSync in
+  /// sync_engine.dart), so a session stays alive indefinitely as long as
+  /// the app - or a background push - syncs at least once within the
+  /// token's TTL. Best-effort: a failure (no network, server unreachable)
+  /// just leaves the existing token in place to keep working until its own
+  /// expiry, rather than disrupting the sync that's already in progress.
+  Future<void> refreshAuth() async {
+    if (!isLoggedIn) return;
+    try {
+      await _client!.collection('users').authRefresh();
+    } catch (_) {
+      // Not fatal - see subscribe() for the same reasoning.
+    }
   }
 
   /// Logs out and forgets the server entirely (URL and saved session).

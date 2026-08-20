@@ -429,6 +429,87 @@ void _mainWidgetTests() {
   );
 
   testWidgets(
+    'the color picker lives in the overflow menu, not a direct toolbar '
+    'icon button',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.palette_outlined), findsNothing);
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      expect(find.text('Change color'), findsOneWidget);
+
+      await tester.tap(find.text('Change color'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('color_swatch_2')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('color_swatch_2')));
+      await tester.pumpAndSettle();
+      // Change color only marks the note dirty and starts the same
+      // debounced autosave as typing does - it doesn't save immediately.
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(notifier.saved.single.colorIndex, 2);
+    },
+  );
+
+  testWidgets(
+    'the move-line toolbar buttons are disabled until the body is actively '
+    'being edited, then move the current line past its neighbor',
+    (tester) async {
+      final note = _existingNote(body: 'First line\nSecond line');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Finder upButton() =>
+          find.widgetWithIcon(IconButton, Icons.arrow_upward_outlined);
+      expect(tester.widget<IconButton>(upButton()).onPressed, isNull);
+
+      // "First line\nSecond line" has no checklist markers, so it parses as
+      // one combined text block - focusBody() gives a deterministic cursor
+      // position (offset 0, on "First line") rather than relying on
+      // exactly where a tap on the whole two-line block happens to land.
+      final bodyState = tester.state<NoteBodyEditorState>(
+        find.byType(NoteBodyEditor),
+      );
+      bodyState.focusBody();
+      await tester.pumpAndSettle();
+      expect(tester.widget<IconButton>(upButton()).onPressed, isNotNull);
+
+      await tester.tap(find.byIcon(Icons.arrow_downward_outlined));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.testTextInput.editingState?['text'],
+        'Second line\nFirst line',
+      );
+    },
+  );
+
+  testWidgets(
     'Duplicate and Delete are not offered for a brand-new, never-saved '
     "note - there's nothing persisted yet to duplicate or remove",
     (tester) async {
@@ -644,6 +725,46 @@ void _mainWidgetTests() {
     expect(find.text('open note'), findsOneWidget);
     expect(find.byKey(const Key('title_field')), findsNothing);
   });
+
+  testWidgets(
+    'pressing Enter/Next in the title field moves focus into the note '
+    'body, landing at its very start',
+    (tester) async {
+      final note = _existingNote(body: 'existing body text');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('title_field')));
+      await tester.pumpAndSettle();
+
+      final bodyState = tester.state<NoteBodyEditorState>(
+        find.byType(NoteBodyEditor),
+      );
+      expect(bodyState.isEditingBody, isFalse);
+
+      await tester.testTextInput.receiveAction(TextInputAction.next);
+      await tester.pumpAndSettle();
+
+      expect(bodyState.isEditingBody, isTrue);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('body_edit_field')))
+            .controller!
+            .selection,
+        const TextSelection.collapsed(offset: 0),
+      );
+    },
+  );
 
   testWidgets(
     'the back button while the body editor is mid-edit backs out of edit '

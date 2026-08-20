@@ -32,6 +32,16 @@ fun noteColorProvider(colorIndex: Int): GlanceColorProvider {
 val noteTextColorProvider: GlanceColorProvider =
     ColorProvider(day = Color(0xFF202124), night = Color(0xFFE8EAED))
 
+// Same fixed link-blue convention as note_editor_screen.dart's own
+// linkColor (Colors.blue / Colors.lightBlueAccent) - see its comment for
+// why this doesn't derive from the note's own background color. Used by
+// SingleNoteWidget for a block whose entire text is a single markdown/bare
+// URL link - see WidgetService.buildSingleNoteJson's isLink flag and
+// SingleNoteWidget.kt's own comment for why only a *whole* block, never
+// just part of a mixed line, can be styled this way here.
+val linkColorProvider: GlanceColorProvider =
+    ColorProvider(day = Color(0xFF2196F3), night = Color(0xFF40C4FF))
+
 // Reminder List widget: neutral background matching the app's own
 // scaffold background roughly, plus amber/green row-time colors mirroring
 // NoteCard's _ReminderChip convention (note_card.dart). Only two states

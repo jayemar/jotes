@@ -26,26 +26,17 @@ const _snoozeActionId = 'snooze';
 /// never delivered. Deliberately local/per-device (SharedPreferences, not
 /// synced), matching how each device's own alarm delivery is independent.
 ///
-/// Distinct from [_resolvedReminderIdsPrefsKey] below: "handled" means
-/// delivery was attempted for the current cycle, "resolved" means the user
-/// actually acted on it. Keeping these separate matters because "handled"
-/// is checked from a path that runs often (every sync reconnect/push, via
-/// rescheduleAll), while "resolved" is only meant to gate a once-per-app-
-/// launch restart-recovery check - if they were the same flag, a
-/// still-unresolved reminder would get re-posted (and likely re-alert)
-/// every time a sync cycle ran, not just after an actual restart.
+/// Distinct from [Note.reminderResolved]: "handled" means delivery was
+/// attempted for the current cycle on *this* device, "resolved" means the
+/// user actually acted on it, from *any* device - see Note.reminderResolved's
+/// own doc comment for why that one is synced instead. Keeping these
+/// separate matters because "handled" is checked from a path that runs
+/// often (every sync reconnect/push, via rescheduleAll), while a resolved
+/// check is only meant to gate a once-per-app-launch restart-recovery check
+/// - if they were the same flag, a still-unresolved reminder would get
+/// re-posted (and likely re-alert) every time a sync cycle ran, not just
+/// after an actual restart.
 const _handledReminderIdsPrefsKey = 'handled_reminder_note_ids';
-
-/// Note ids whose reminder the user has explicitly acted on for the
-/// current cycle - Dismiss or Snooze (see reminder_popup.dart).
-/// Deliberately NOT set by Open note or Ignore, nor by merely viewing the
-/// popup/notification - opening a note to look at it isn't the same as
-/// deciding you're done with its reminder. Used by restoreUnresolvedReminders
-/// to decide what should reappear after a restart, and by WidgetService to
-/// decide what the Scheduled Reminders widget still lists. Cleared whenever
-/// schedule() starts a fresh cycle for a note (see schedule()), so a past
-/// cycle's resolution doesn't leak into the next one.
-const _resolvedReminderIdsPrefsKey = 'resolved_reminder_note_ids';
 
 NotificationDetails _reminderNotificationDetails(Note note) {
   return NotificationDetails(
@@ -291,11 +282,11 @@ class NotificationService {
     // an alarm Android already scheduled normally for one that was never
     // delivered at all.
     await _markReminderHandled(note.id);
-    // This is a fresh cycle - clear any resolution left over from a
-    // previous one (e.g. this note's last reminder was dismissed, and it's
-    // now being reused for a new one), so restoreUnresolvedReminders
-    // doesn't mistake the new cycle for an already-resolved one.
-    await _clearReminderResolved(note.id);
+    // Unlike the old local-only "resolved" flag, note.reminderResolved
+    // doesn't need clearing here for a fresh cycle - whoever set this
+    // note's new (future) reminderAt is responsible for also setting
+    // reminderResolved: false on the same Note, so it already arrives here
+    // correct (see Note.reminderResolved's own doc comment).
   }
 
   /// Shows a reminder immediately rather than scheduling it for later -
@@ -347,37 +338,6 @@ class NotificationService {
     ]);
   }
 
-  /// Also used by WidgetService to decide what the Scheduled Reminders
-  /// widget still lists, not just internally here.
-  Future<bool> isReminderResolved(String noteId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final resolved = prefs.getStringList(_resolvedReminderIdsPrefsKey) ?? [];
-    return resolved.contains(noteId);
-  }
-
-  /// Called from Dismiss and Snooze only - see reminder_popup.dart.
-  /// Deliberately not called by Open note or Ignore, nor by merely viewing
-  /// the popup/notification.
-  Future<void> markReminderResolved(String noteId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final resolved = prefs.getStringList(_resolvedReminderIdsPrefsKey) ?? [];
-    if (resolved.contains(noteId)) return;
-    await prefs.setStringList(_resolvedReminderIdsPrefsKey, [
-      ...resolved,
-      noteId,
-    ]);
-  }
-
-  Future<void> _clearReminderResolved(String noteId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final resolved = prefs.getStringList(_resolvedReminderIdsPrefsKey) ?? [];
-    if (!resolved.contains(noteId)) return;
-    await prefs.setStringList(_resolvedReminderIdsPrefsKey, [
-      for (final id in resolved)
-        if (id != noteId) id,
-    ]);
-  }
-
   /// Overridable by tests to observe cancel() calls without touching the
   /// real plugin, which throws with no platform implementation registered
   /// in flutter_test's VM environment (matching DbService.debugFactory's
@@ -394,13 +354,74 @@ class NotificationService {
     await _plugin.cancel(notificationId);
   }
 
+  /// Reconciles this device's local alarm/tray notification for [next]
+  /// against [previous] (the locally-stored copy from just before this
+  /// save - null for a brand-new note) - cancels and/or reschedules *only*
+  /// if a reminder-relevant field actually changed (reminderAt or
+  /// reminderResolved), leaving an edit to an unrelated field (title, body,
+  /// color) from touching notifications at all. Used by both
+  /// NotesNotifier.addOrUpdate (a local edit) and
+  /// SyncNotifier._handleRemoteEvent (an incoming remote one), replacing
+  /// what both used to do: cancel unconditionally on every single save,
+  /// then reschedule only if a reminder was still due. That was riskier
+  /// than it looked - a transient schedule() failure (or the app process
+  /// dying between the two calls) silently dropped an otherwise-untouched
+  /// reminder, and even without a failure, saving an unrelated field while
+  /// an already-fired reminder sat visible in the tray cancelled that
+  /// notification for no reason, with no reminderAt change to trigger a
+  /// re-post. rescheduleAll/restoreUnresolvedReminders remain the periodic
+  /// safety net for anything this diff-based check itself misses (e.g. an
+  /// initial schedule() call that failed silently).
+  ///
+  /// Returns the scheduling error's description if scheduling failed, same
+  /// contract as [schedule] - this method itself never throws, so callers
+  /// don't need their own try/catch around it.
+  Future<String?> reconcile(Note? previous, Note next) async {
+    final reminderChanged = previous?.reminderAt != next.reminderAt;
+    final resolvedChanged =
+        previous?.reminderResolved != next.reminderResolved;
+    if (!reminderChanged && !resolvedChanged) return null;
+
+    try {
+      await cancel(next.notificationId);
+    } catch (_) {
+      // Not meaningful on its own - proceed to (re)scheduling regardless.
+    }
+
+    final dueInFuture =
+        next.reminderAt != null && next.reminderAt!.isAfter(DateTime.now());
+    if (!dueInFuture || next.reminderResolved) return null;
+
+    try {
+      await schedule(next);
+    } catch (e) {
+      return e.toString();
+    }
+    return null;
+  }
+
+  /// Re-asserts every note's reminder state without ever wiping anything
+  /// first: each future reminder's schedule() call naturally replaces
+  /// whatever alarm already exists under that note's id (Android/
+  /// flutter_local_notifications both treat a fresh zonedSchedule for the
+  /// same id as superseding the old one), and showOverdueIfNotAlready
+  /// already only re-posts an overdue reminder that hasn't been handled
+  /// yet. This used to open with a blanket _plugin.cancelAll() "for good
+  /// measure" - except that also wipes every currently *visible*
+  /// notification for an already-fired, still-unresolved reminder, and
+  /// since this runs on every sync (app open, pull-to-refresh, periodic
+  /// background refresh, every incoming push), that meant a reminder you
+  /// were actively looking at in the tray could vanish out from under you
+  /// for no reason connected to anything you did. Cleaning up a genuinely
+  /// stale alarm (the note itself deleted, or its reminder cleared/
+  /// resolved) is instead each specific mutation's own job now - see
+  /// NotificationService.reconcile, used by NotesNotifier.addOrUpdate,
+  /// SyncNotifier._handleRemoteEvent, and mergeSync.
   Future<void> rescheduleAll() async {
     if (kIsWeb) return;
-    await _plugin.cancelAll();
     final notes = await DbService.instance.withFutureReminders();
     for (final note in notes) {
-      // cancelAll() above already wiped every previously scheduled alarm -
-      // one note failing to (re)schedule (e.g. a transient plugin error)
+      // One note failing to (re)schedule (e.g. a transient plugin error)
       // must not silently cost every other note later in this list its
       // alarm too, which an unguarded loop would do.
       try {
@@ -470,7 +491,7 @@ class NotificationService {
     final activeIds = await _activeNotificationIds();
     for (final note in overdue) {
       try {
-        if (await isReminderResolved(note.id)) continue;
+        if (note.reminderResolved) continue;
         if (activeIds.contains(note.notificationId)) continue;
         await _showNow(note);
       } catch (_) {
@@ -499,15 +520,17 @@ class NotificationService {
 /// see Note.notificationId), which carries none of the cross-isolate risk
 /// below (that only applies to concurrent writers).
 ///
-/// Dismiss otherwise only touches SharedPreferences (markReminderResolved) -
-/// deliberately not writing to the local notes DB, which has no
-/// cross-isolate/cross-process file locking (checked directly - sembast has
-/// none), so a concurrent write from here while the main app might also
-/// have the DB open is a real if narrow risk. Snooze does need one DB write
-/// (the note's new reminderAt) - that risk is accepted there since there's
-/// no way to snooze without persisting a new time somewhere. The snooze
-/// duration itself comes from SnoozeSettings (plain SharedPreferences, not
-/// Riverpod - this isolate has no ProviderScope to read from).
+/// Both actions now also write to the local notes DB (Dismiss to persist
+/// reminderResolved: true, Snooze the note's new reminderAt) and push that
+/// same write up via PbService, so acting on a reminder here is visible to
+/// every other device, not just this one - see Note.reminderResolved's own
+/// doc comment. sembast has no cross-isolate/cross-process file locking
+/// (checked directly), so a concurrent write from here while the main app
+/// might also have the DB open is a real if narrow risk, accepted for both
+/// actions since there's no way to record either outcome without
+/// persisting something. The snooze duration itself comes from
+/// SnoozeSettings (plain SharedPreferences, not Riverpod - this isolate has
+/// no ProviderScope to read from).
 @pragma('vm:entry-point')
 Future<void> handleBackgroundReminderAction(
   NotificationResponse response,
@@ -537,14 +560,24 @@ Future<void> handleBackgroundReminderAction(
     final note = await DbService.instance.getById(noteId);
 
     if (actionId == _dismissActionId) {
-      if (note != null) {
-        // Failure here must not skip markReminderResolved below - same
-        // reasoning as reminder_popup.dart's own Dismiss handler.
-        try {
-          await NotificationService.instance.cancel(note.notificationId);
-        } catch (_) {}
+      if (note == null) return; // deleted since the reminder fired - nothing to mark
+      // Failure here must not skip persisting reminderResolved below - same
+      // reasoning as the Snooze branch's own cancel-then-persist ordering.
+      try {
+        await NotificationService.instance.cancel(note.notificationId);
+      } catch (_) {}
+
+      final resolved = note.copyWith(
+        reminderResolved: true,
+        updated: DateTime.now(),
+      );
+      await DbService.instance.upsert(resolved);
+      try {
+        await PbService.instance.restore();
+        await PbService.instance.upsert(resolved);
+      } catch (_) {
+        // Best-effort - the local DB write above already succeeded.
       }
-      await NotificationService.instance.markReminderResolved(noteId);
       return;
     }
     if (actionId != _snoozeActionId) return;
@@ -560,6 +593,7 @@ Future<void> handleBackgroundReminderAction(
 
     final updated = note.copyWith(
       reminderAt: newReminderAt,
+      reminderResolved: false,
       updated: DateTime.now(),
     );
     await DbService.instance.upsert(updated);

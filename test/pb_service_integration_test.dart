@@ -56,6 +56,42 @@ void main() {
       expect(PbService.instance.userEmail, email);
     });
 
+    test('updateUserData persists a custom field on the user record, '
+        'visible via userData right away and after a fresh restore + '
+        'refreshAuth - the basis for cross-device settings sync (see '
+        'SnoozeSettings)', () async {
+      await PbService.instance.connect(_testServerUrl);
+      await PbService.instance.register(
+        'test-${_uuid.v4()}@example.com',
+        'password123',
+      );
+
+      await PbService.instance.updateUserData({
+        'snooze_mode': 'thirtyMinutes',
+        'snooze_custom_delay_minutes': 45,
+      });
+
+      expect(PbService.instance.userData?['snooze_mode'], 'thirtyMinutes');
+
+      // Simulate a second device (or this device after a restart): nothing
+      // but what's in prefs survives, then a fresh authRefresh (see
+      // refreshAuth) has to be what actually pulls the updated record back
+      // down, same as it does in mergeSync.
+      await PbService.instance.restore();
+      await PbService.instance.refreshAuth();
+      expect(PbService.instance.userData?['snooze_mode'], 'thirtyMinutes');
+      expect(PbService.instance.userData?['snooze_custom_delay_minutes'], 45);
+    });
+
+    test('updateUserData is a harmless no-op when not logged in', () async {
+      await PbService.instance.connect(_testServerUrl);
+
+      await expectLater(
+        PbService.instance.updateUserData({'snooze_mode': 'oneHour'}),
+        completes,
+      );
+    });
+
     test('upsert creates a record retrievable via fetchAll', () async {
       await PbService.instance.connect(_testServerUrl);
       await PbService.instance.register(
@@ -171,6 +207,29 @@ void main() {
 
       await PbService.instance.unsubscribe();
       expect(events, contains('create:${note.id}'));
+    });
+
+    test('refreshAuth renews the session without disturbing who is logged '
+        'in', () async {
+      final email = 'test-${_uuid.v4()}@example.com';
+      await PbService.instance.connect(_testServerUrl);
+      await PbService.instance.register(email, 'password123');
+      expect(PbService.instance.isLoggedIn, isTrue);
+
+      await PbService.instance.refreshAuth();
+
+      expect(PbService.instance.isLoggedIn, isTrue);
+      expect(PbService.instance.userEmail, email);
+    });
+
+    test('refreshAuth is a no-op (does not throw) when not logged in',
+        () async {
+      await PbService.instance.connect(_testServerUrl);
+      expect(PbService.instance.isLoggedIn, isFalse);
+
+      await PbService.instance.refreshAuth();
+
+      expect(PbService.instance.isLoggedIn, isFalse);
     });
 
     test('disconnect logs out and forgets the session', () async {

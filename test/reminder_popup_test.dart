@@ -5,7 +5,6 @@ import 'package:jotes/models/note.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/services/notification_service.dart';
 import 'package:jotes/widgets/reminder_popup.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 Note _note() {
   final now = DateTime.now();
@@ -19,7 +18,11 @@ Note _note() {
 }
 
 /// Records every addOrUpdate call in memory instead of touching real
-/// storage - mirrors the same pattern in note_editor_screen_test.dart.
+/// storage - real sembast file I/O doesn't resolve within flutter_test's
+/// fake-async pump cycle, so it hangs pumpAndSettle (see
+/// notes_screen_selection_test.dart/note_editor_screen_test.dart for the
+/// same lesson). Used for every test here now that Dismiss/Snooze both
+/// persist through addOrUpdate (see Note.reminderResolved), not just Snooze.
 class _RecordingNotesNotifier extends NotesNotifier {
   final List<Note> saved = [];
 
@@ -37,18 +40,17 @@ class _RecordingNotesNotifier extends NotesNotifier {
 class _Harness {
   final BuildContext context;
   final WidgetRef ref;
-  const _Harness(this.context, this.ref);
+  final _RecordingNotesNotifier recorder;
+  const _Harness(this.context, this.ref, this.recorder);
 }
 
-Future<_Harness> _pumpHost(
-  WidgetTester tester, {
-  NotesNotifier Function()? notifier,
-}) async {
+Future<_Harness> _pumpHost(WidgetTester tester) async {
+  final recorder = _RecordingNotesNotifier();
   late BuildContext capturedContext;
   late WidgetRef capturedRef;
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [if (notifier != null) notesProvider.overrideWith(notifier)],
+      overrides: [notesProvider.overrideWith(() => recorder)],
       child: MaterialApp(
         home: Consumer(
           builder: (context, ref, child) {
@@ -60,7 +62,7 @@ Future<_Harness> _pumpHost(
       ),
     ),
   );
-  return _Harness(capturedContext, capturedRef);
+  return _Harness(capturedContext, capturedRef, recorder);
 }
 
 void main() {
@@ -69,10 +71,6 @@ void main() {
   setUp(() {
     canceledIds.clear();
     NotificationService.instance.debugOnCancel = canceledIds.add;
-    // markReminderResolved (Dismiss/Snooze) touches SharedPreferences -
-    // unmocked, the plugin has no platform implementation registered in
-    // this test environment.
-    SharedPreferences.setMockInitialValues({});
   });
 
   tearDown(() {
@@ -116,8 +114,8 @@ void main() {
   });
 
   testWidgets(
-    'Dismiss closes the popup, does not open the note, and cancels the '
-    'tray notification',
+    'Dismiss closes the popup, cancels the tray notification, and '
+    'persists reminderResolved on the note so it syncs to other devices',
     (tester) async {
       final host = await _pumpHost(tester);
       final note = _note();
@@ -131,10 +129,9 @@ void main() {
       expect(find.text('Take out the trash'), findsNothing);
       expect(find.byKey(const Key('title_field')), findsNothing);
       expect(canceledIds, contains(note.notificationId));
-      expect(
-        await NotificationService.instance.isReminderResolved(note.id),
-        isTrue,
-      );
+      expect(host.recorder.saved, hasLength(1));
+      expect(host.recorder.saved.single.id, note.id);
+      expect(host.recorder.saved.single.reminderResolved, isTrue);
     },
   );
 
@@ -154,10 +151,7 @@ void main() {
       expect(find.text('Take out the trash'), findsNothing);
       expect(find.byKey(const Key('title_field')), findsNothing);
       expect(canceledIds, isEmpty);
-      expect(
-        await NotificationService.instance.isReminderResolved(note.id),
-        isFalse,
-      );
+      expect(host.recorder.saved, isEmpty);
     },
   );
 
@@ -179,16 +173,12 @@ void main() {
     expect(find.byKey(const Key('title_field')), findsOneWidget);
     expect(find.text('Take out the trash'), findsOneWidget);
     expect(canceledIds, isEmpty);
-    expect(
-      await NotificationService.instance.isReminderResolved(note.id),
-      isFalse,
-    );
+    expect(host.recorder.saved, isEmpty);
   });
 
   testWidgets('Snooze cancels the tray notification, then picking a new time '
       'saves the note with the updated reminder', (tester) async {
-    final recorder = _RecordingNotesNotifier();
-    final host = await _pumpHost(tester, notifier: () => recorder);
+    final host = await _pumpHost(tester);
     final note = _note();
 
     showReminderPopup(host.context, host.ref, note);
@@ -200,10 +190,11 @@ void main() {
     // The popup itself closed immediately, before any picker interaction.
     expect(find.text('Take out the trash'), findsNothing);
     expect(canceledIds, contains(note.notificationId));
-    expect(
-      await NotificationService.instance.isReminderResolved(note.id),
-      isTrue,
-    );
+    // The snooze immediately persists reminderResolved: true as a safety
+    // net (see _snooze's own doc comment) before the pickers even open -
+    // this is the first of two addOrUpdate calls this flow makes.
+    expect(host.recorder.saved, hasLength(1));
+    expect(host.recorder.saved.single.reminderResolved, isTrue);
 
     // Confirm the date picker, then the time picker, each with their
     // pre-filled initial value (same flow as note_editor_screen_test.dart).
@@ -213,9 +204,12 @@ void main() {
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
 
-    expect(recorder.saved, hasLength(1));
-    expect(recorder.saved.single.id, note.id);
-    expect(recorder.saved.single.reminderAt, isNotNull);
-    expect(recorder.saved.single.reminderAt!.isAfter(DateTime.now()), isTrue);
+    expect(host.recorder.saved, hasLength(2));
+    final finalSave = host.recorder.saved.last;
+    expect(finalSave.id, note.id);
+    expect(finalSave.reminderAt, isNotNull);
+    expect(finalSave.reminderAt!.isAfter(DateTime.now()), isTrue);
+    // The fresh cycle starts unresolved again - see Note.reminderResolved.
+    expect(finalSave.reminderResolved, isFalse);
   });
 }

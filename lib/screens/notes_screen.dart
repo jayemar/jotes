@@ -21,6 +21,7 @@ import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_card.dart';
 import '../widgets/settings_labels.dart';
 import 'note_editor_screen.dart';
+import 'reminders_screen.dart';
 import 'settings_screen.dart';
 import 'sync_settings_screen.dart';
 
@@ -357,20 +358,34 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                           },
                         ),
                       Padding(
-                        padding: const EdgeInsets.only(right: 16),
+                        padding: const EdgeInsets.only(right: 6),
                         child: Tooltip(
                           message: syncState.status == SyncStatus.connected
                               ? 'Sync connected'
                               : 'Sync not connected',
-                          child: Container(
-                            key: const Key('sync_indicator'),
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: syncState.status == SyncStatus.connected
-                                  ? Colors.green
-                                  : Colors.red,
+                          child: InkWell(
+                            key: const Key('sync_indicator_button'),
+                            customBorder: const CircleBorder(),
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const SyncSettingsScreen(),
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Container(
+                                key: const Key('sync_indicator'),
+                                width: 10,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color:
+                                      syncState.status == SyncStatus.connected
+                                      ? Colors.green
+                                      : Colors.red,
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -479,6 +494,20 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                         context,
                         MaterialPageRoute(
                           builder: (_) => const SettingsScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('reminders_drawer_item'),
+                    leading: const Icon(Icons.notifications_outlined),
+                    title: Text('Reminders', style: itemStyle),
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const RemindersScreen(),
                         ),
                       );
                     },

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/appearance_provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/autostart_service.dart';
+import '../services/periodic_refresh_settings.dart';
 import '../services/snooze_settings.dart';
 import '../theme/app_text_styles.dart';
 import '../widgets/settings_labels.dart';
@@ -20,6 +21,7 @@ class SettingsScreen extends ConsumerWidget {
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
+        key: const Key('settings_list'),
         children: [
           const SectionLabel('Appearance'),
           const FieldLabel('Theme'),
@@ -95,6 +97,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const SectionLabel('Reminders'),
           const _SnoozeDurationSetting(),
+          const _PeriodicRefreshSetting(),
           const _AutostartSetting(),
         ],
       ),
@@ -243,6 +246,53 @@ class _SnoozeDurationSettingState extends State<_SnoozeDurationSetting> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Toggles the periodic (~15 minute) background refresh - see
+/// PeriodicRefreshWorker.kt and main.dart's --periodic-refresh branch for
+/// what it actually does. On by default; the switch simply persists the
+/// choice and tells native's WorkManager schedule to match it immediately
+/// (see PeriodicRefreshSettings.setEnabled), rather than waiting for the
+/// next app launch.
+class _PeriodicRefreshSetting extends StatefulWidget {
+  const _PeriodicRefreshSetting();
+
+  @override
+  State<_PeriodicRefreshSetting> createState() =>
+      _PeriodicRefreshSettingState();
+}
+
+class _PeriodicRefreshSettingState extends State<_PeriodicRefreshSetting> {
+  bool? _enabled;
+
+  @override
+  void initState() {
+    super.initState();
+    PeriodicRefreshSettings.instance.isEnabled().then((enabled) {
+      if (mounted) setState(() => _enabled = enabled);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = _enabled;
+    if (enabled == null) return const SizedBox.shrink();
+
+    return SwitchListTile(
+      key: const Key('periodic_refresh_setting'),
+      title: const Text('Background refresh'),
+      subtitle: const Text(
+        'Every 15 minutes or so, keep the home-screen widget accurate and '
+        're-alert for an overdue reminder that got cleared from the '
+        'notification shade without being dismissed or snoozed.',
+      ),
+      value: enabled,
+      onChanged: (value) {
+        setState(() => _enabled = value);
+        PeriodicRefreshSettings.instance.setEnabled(value);
+      },
     );
   }
 }
