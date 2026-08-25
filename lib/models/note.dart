@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'repeat_rule.dart';
 
 const List<Color> kNoteColors = [
   Color(0xFFFFFFFF),
@@ -39,54 +42,6 @@ Color noteColorFor(BuildContext context, int colorIndex) {
   return palette[colorIndex.clamp(0, palette.length - 1)];
 }
 
-/// How often a reminder should recur once it's been Dismissed - see
-/// [nextOccurrence] and Note.repeatInterval's own doc comment. Deliberately
-/// just these four fixed presets (no arbitrary "every N days" or specific
-/// weekday selection) - the same "cover the common case with zero setup"
-/// reasoning as SnoozeMode's own fixed presets.
-enum RepeatInterval {
-  none('Does not repeat'),
-  daily('Daily'),
-  weekly('Weekly'),
-  monthly('Monthly'),
-  yearly('Yearly');
-
-  const RepeatInterval(this.label);
-
-  /// Shown in the repeat picker (see NoteEditorScreen).
-  final String label;
-}
-
-/// Advances [from] to its next occurrence under [interval] - the core
-/// logic behind rolling a repeating reminder forward on Dismiss (see
-/// reminder_popup.dart and notification_service.dart's
-/// handleBackgroundReminderAction). [RepeatInterval.monthly]/[yearly] use
-/// DateTime's own month/year arithmetic, which normalizes an
-/// out-of-range day (e.g. Jan 31 + 1 month) into the following month
-/// instead of clamping to that month's last day - a deliberately simple
-/// "add N and go" recurrence, not full calendar-aware scheduling.
-DateTime nextOccurrence(DateTime from, RepeatInterval interval) {
-  return switch (interval) {
-    RepeatInterval.none => from,
-    RepeatInterval.daily => from.add(const Duration(days: 1)),
-    RepeatInterval.weekly => from.add(const Duration(days: 7)),
-    RepeatInterval.monthly => DateTime(
-        from.year,
-        from.month + 1,
-        from.day,
-        from.hour,
-        from.minute,
-      ),
-    RepeatInterval.yearly => DateTime(
-        from.year + 1,
-        from.month,
-        from.day,
-        from.hour,
-        from.minute,
-      ),
-  };
-}
-
 class Note {
   final String id;
   final String title;
@@ -118,19 +73,30 @@ class Note {
   /// update, resolved or not. Meaningless (and always false) once
   /// [reminderAt] is null or in the future - only an already-fired
   /// reminder can be "resolved" - and reset to false whenever a fresh
-  /// [reminderAt] is set (see NoteEditorScreen._pickReminder and the
+  /// [reminderAt] is set (see NoteEditorScreen._openReminderEditor and the
   /// Snooze paths), so a reused reminder starts its new cycle unresolved.
   final bool reminderResolved;
 
-  /// How often this reminder should recur - see [nextOccurrence]. Rolled
-  /// forward automatically on Dismiss (not Snooze, which only delays this
-  /// one occurrence without advancing the cycle - see reminder_popup.dart)
+  /// The recurrence rule this reminder repeats under - see [RepeatRule].
+  /// Null means "does not repeat" (also its own end state once a rule with
+  /// a [RepeatEnd] condition runs its course - see
+  /// NotificationService.advanceOverdueRepeatingReminders). Rolled forward
+  /// automatically on Dismiss (not Snooze, which only delays this one
+  /// occurrence without advancing the cycle - see reminder_popup.dart)
   /// rather than marking [reminderResolved] and stopping there: Dismissing
   /// a repeating reminder computes the next [reminderAt] from the current
-  /// one and clears [reminderResolved] for that fresh cycle, the same way
-  /// setting a brand new reminderAt already does. [RepeatInterval.none] by
-  /// default - only ever meaningful together with a non-null [reminderAt].
-  final RepeatInterval repeatInterval;
+  /// one via [nextRuleOccurrence] and clears [reminderResolved] for that
+  /// fresh cycle, the same way setting a brand new reminderAt already
+  /// does. Only ever meaningful together with a non-null [reminderAt].
+  final RepeatRule? repeatRule;
+
+  /// Which occurrence of [repeatRule] the current [reminderAt] represents,
+  /// counting the very first (original) occurrence as 1 - meaningless
+  /// (and always 1) when [repeatRule] is null. Only exists to let a
+  /// [RepeatEndAfterCount] end condition know when it's been exhausted
+  /// (see [nextRuleOccurrence]); a [RepeatEndNever] or [RepeatEndOnDate]
+  /// rule never actually reads this.
+  final int repeatOccurrenceNumber;
 
   const Note({
     required this.id,
@@ -142,7 +108,8 @@ class Note {
     required this.updated,
     this.deleted = false,
     this.reminderResolved = false,
-    this.repeatInterval = RepeatInterval.none,
+    this.repeatRule,
+    this.repeatOccurrenceNumber = 1,
   });
 
   bool get isEmpty => title.isEmpty && body.isEmpty && reminderAt == null;
@@ -156,7 +123,8 @@ class Note {
     Object? reminderAt = _sentinel,
     DateTime? updated,
     bool? reminderResolved,
-    RepeatInterval? repeatInterval,
+    Object? repeatRule = _sentinel,
+    int? repeatOccurrenceNumber,
   }) {
     return Note(
       id: id,
@@ -168,7 +136,11 @@ class Note {
       created: created,
       updated: updated ?? this.updated,
       reminderResolved: reminderResolved ?? this.reminderResolved,
-      repeatInterval: repeatInterval ?? this.repeatInterval,
+      repeatRule: identical(repeatRule, _sentinel)
+          ? this.repeatRule
+          : repeatRule as RepeatRule?,
+      repeatOccurrenceNumber:
+          repeatOccurrenceNumber ?? this.repeatOccurrenceNumber,
     );
   }
 
@@ -181,7 +153,8 @@ class Note {
         'created': created.millisecondsSinceEpoch,
         'updated': updated.millisecondsSinceEpoch,
         'reminder_resolved': reminderResolved,
-        'repeat_interval': repeatInterval.name,
+        'repeat_rule': repeatRule == null ? null : jsonEncode(repeatRule!.toJson()),
+        'repeat_occurrence_number': repeatOccurrenceNumber,
       };
 
   factory Note.fromMap(Map<String, dynamic> map) => Note(
@@ -195,7 +168,8 @@ class Note {
         created: DateTime.fromMillisecondsSinceEpoch(map['created'] as int),
         updated: DateTime.fromMillisecondsSinceEpoch(map['updated'] as int),
         reminderResolved: (map['reminder_resolved'] as bool?) ?? false,
-        repeatInterval: _repeatIntervalFromName(map['repeat_interval'] as String?),
+        repeatRule: RepeatRule.fromJson(map['repeat_rule'] as String?),
+        repeatOccurrenceNumber: (map['repeat_occurrence_number'] as int?) ?? 1,
       );
 
   Map<String, dynamic> toPocketBase() => {
@@ -208,7 +182,8 @@ class Note {
         // clear a stale remote tombstone rather than leave it set.
         'deleted': false,
         'reminder_resolved': reminderResolved,
-        'repeat_interval': repeatInterval.name,
+        'repeat_rule': repeatRule == null ? '' : jsonEncode(repeatRule!.toJson()),
+        'repeat_occurrence_number': repeatOccurrenceNumber,
       };
 
   factory Note.fromPocketBase(Map<String, dynamic> r) {
@@ -230,41 +205,46 @@ class Note {
           : now,
       deleted: r['deleted'] == true,
       reminderResolved: r['reminder_resolved'] == true,
-      repeatInterval: _repeatIntervalFromName(r['repeat_interval'] as String?),
+      repeatRule: RepeatRule.fromJson(r['repeat_rule'] as String?),
+      repeatOccurrenceNumber: (r['repeat_occurrence_number'] as num?)?.toInt() ?? 1,
     );
   }
-}
-
-/// Falls back to [RepeatInterval.none] for a missing/empty/unrecognized
-/// value - covers a note that predates this field (local storage or an
-/// un-migrated server, same reasoning as SnoozeSettings.getMode's own
-/// fallback for a removed enum value) rather than throwing.
-RepeatInterval _repeatIntervalFromName(String? name) {
-  for (final interval in RepeatInterval.values) {
-    if (interval.name == name) return interval;
-  }
-  return RepeatInterval.none;
 }
 
 const Object _sentinel = Object();
 
 /// The [Note] that should result from Dismissing its current reminder - if
-/// it repeats (see [RepeatInterval]), rolls [Note.reminderAt] forward to
-/// its next occurrence via [nextOccurrence] and starts that fresh cycle
-/// unresolved, the same as setting a brand new reminderAt already does
-/// (see [Note.reminderResolved]'s own doc comment); otherwise just marks
-/// this cycle resolved, same as a non-repeating reminder always has.
-/// Shared by reminder_popup.dart's in-app Dismiss button and
+/// it repeats (see [Note.repeatRule]) and hasn't run its own course yet,
+/// rolls [Note.reminderAt] forward to its next occurrence via
+/// [nextRuleOccurrence] and starts that fresh cycle unresolved, the same
+/// as setting a brand new reminderAt already does (see
+/// [Note.reminderResolved]'s own doc comment); otherwise (no rule, or the
+/// rule's own [RepeatEnd] condition has now been reached) just marks this
+/// cycle resolved and clears [Note.repeatRule], same as a non-repeating
+/// reminder always has - a rule that's run its course behaves identically
+/// to one that never repeated at all from this point on. Shared by
+/// reminder_popup.dart's in-app Dismiss button and
 /// notification_service.dart's background one (handleBackgroundReminderAction),
 /// so dismissing a repeating reminder behaves identically from either path.
 Note noteAfterDismiss(Note note) {
   final reminderAt = note.reminderAt;
-  if (note.repeatInterval == RepeatInterval.none || reminderAt == null) {
+  final rule = note.repeatRule;
+  if (rule == null || reminderAt == null) {
     return note.copyWith(reminderResolved: true, updated: DateTime.now());
   }
+
+  final next = nextRuleOccurrence(reminderAt, note.repeatOccurrenceNumber, rule);
+  if (next == null) {
+    return note.copyWith(
+      reminderResolved: true,
+      repeatRule: null,
+      updated: DateTime.now(),
+    );
+  }
   return note.copyWith(
-    reminderAt: nextOccurrence(reminderAt, note.repeatInterval),
+    reminderAt: next.reminderAt,
     reminderResolved: false,
+    repeatOccurrenceNumber: next.occurrenceNumber,
     updated: DateTime.now(),
   );
 }

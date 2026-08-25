@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
+import 'package:jotes/models/repeat_rule.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/note_editor_screen.dart';
 import 'package:jotes/screens/notes_screen.dart';
@@ -21,6 +22,7 @@ Note _note({
   String title = '',
   DateTime? reminderAt,
   bool reminderResolved = false,
+  RepeatRule? repeatRule,
 }) {
   final now = DateTime.now();
   return Note(
@@ -30,6 +32,7 @@ Note _note({
     created: now,
     updated: now,
     reminderResolved: reminderResolved,
+    repeatRule: repeatRule,
   );
 }
 
@@ -163,5 +166,37 @@ void main() {
 
     expect(find.byType(NoteEditorScreen), findsOneWidget);
     expect(find.byKey(const Key('reminder_popup_dismiss')), findsNothing);
+  });
+
+  testWidgets('a repeating reminder shows a trailing repeat glyph, a '
+      'non-repeating one does not', (tester) async {
+    final now = DateTime.now();
+    await _pumpRemindersScreen(tester, [
+      _note(
+        id: 'repeating',
+        title: 'Repeating',
+        reminderAt: now.add(const Duration(hours: 1)),
+        repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+      ),
+      _note(
+        id: 'once',
+        title: 'Once',
+        reminderAt: now.add(const Duration(hours: 2)),
+      ),
+    ]);
+
+    final repeatingTile = tester.widget<ListTile>(
+      find.ancestor(
+        of: find.text('Repeating'),
+        matching: find.byType(ListTile),
+      ),
+    );
+    final onceTile = tester.widget<ListTile>(
+      find.ancestor(of: find.text('Once'), matching: find.byType(ListTile)),
+    );
+
+    expect(repeatingTile.trailing, isNotNull);
+    expect(onceTile.trailing, isNull);
+    expect(find.byIcon(Icons.repeat), findsOneWidget);
   });
 }

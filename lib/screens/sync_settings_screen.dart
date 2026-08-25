@@ -74,6 +74,19 @@ class _SyncSettingsScreenState extends ConsumerState<SyncSettingsScreen> {
     // only ever offer to *fill* an already-saved entry, never prompt to
     // save a new one after a successful sign-in/registration.
     TextInput.finishAutofillContext();
+
+    if (!mounted) return;
+    // A successful connect from this form means the user came here to get
+    // synced up and back to their notes, not to admire the "Connected to:"
+    // summary - that view is still useful when reached deliberately while
+    // already connected (the drawer entry/sync-status-dot from
+    // notes_screen.dart, both of which push this screen directly on top of
+    // it), just not as the landing spot right after typing credentials in.
+    // connect() itself has no success/failure return value - status is
+    // read back from the provider instead.
+    if (ref.read(syncProvider).status == SyncStatus.connected) {
+      Navigator.pop(context);
+    }
   }
 
   /// Forces a full reconciliation right now (see SyncNotifier.resync) -

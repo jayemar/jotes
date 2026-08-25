@@ -186,6 +186,49 @@ void main() {
     expect(find.byKey(const Key('search_field')), findsOneWidget);
   });
 
+  testWidgets(
+    'deleting plays a fade/shrink-out animation before the note actually '
+    'disappears, rather than removing it instantaneously',
+    (tester) async {
+      await _pumpNotesScreen(tester, [
+        _note(title: 'Alpha'),
+        _note(title: 'Gamma'),
+      ]);
+
+      await tester.longPress(find.text('Alpha'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      // A single frame, not pumpAndSettle - catches the animation mid-flight
+      // rather than jumping straight to its settled end state.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+
+      // Still present (the underlying delete is deferred until the
+      // animation completes - see NotesScreen._finishDelete), but fading
+      // out rather than at full opacity - AnimatedOpacity.opacity is only
+      // the animation's *target*; AnimatedOpacity itself renders as a
+      // FadeTransition internally, so this checks that transition's own
+      // live Animation value instead, to catch the real interpolated
+      // opacity mid-flight.
+      expect(find.text('Alpha'), findsOneWidget);
+      final fading = tester
+          .widgetList<FadeTransition>(
+            find.ancestor(
+              of: find.text('Alpha'),
+              matching: find.byType(FadeTransition),
+            ),
+          )
+          .first;
+      expect(fading.opacity.value, lessThan(1));
+      expect(fading.opacity.value, greaterThan(0));
+
+      // Once the animation finishes, the note is actually gone.
+      await tester.pumpAndSettle();
+      expect(find.text('Alpha'), findsNothing);
+      expect(find.text('Gamma'), findsOneWidget);
+    },
+  );
+
   testWidgets('color action recolors selected notes and clears selection',
       (tester) async {
     final container = await _pumpNotesScreen(tester, [

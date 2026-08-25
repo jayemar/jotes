@@ -54,6 +54,19 @@ class RemindersScreen extends ConsumerWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(_timeFormat.format(note.reminderAt!)),
+                // A small repeat glyph, not the rule's own full summary -
+                // this list is a quick scan of what's active/pending, not
+                // the place to review exactly how each one recurs (that's
+                // ReminderEditScreen's job, reached by opening the note
+                // itself). Same reasoning as note_card.dart's own
+                // reminder chip.
+                trailing: note.repeatRule != null
+                    ? Icon(
+                        Icons.repeat,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      )
+                    : null,
                 // An overdue reminder is one that's already fired - the
                 // same Open note/Snooze/Dismiss/Ignore choice as tapping
                 // its actual tray notification would offer (see

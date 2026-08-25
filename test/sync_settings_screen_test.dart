@@ -37,6 +37,88 @@ class _RecordingSyncNotifier extends SyncNotifier {
   }
 }
 
+/// Goes straight from disconnected to whatever [connect] is told to
+/// resolve to, instead of hitting a real PbService - lets tests drive the
+/// form submission flow without a real server.
+class _ConnectingSyncNotifier extends SyncNotifier {
+  _ConnectingSyncNotifier({required this.succeeds});
+  final bool succeeds;
+
+  @override
+  SyncState build() => SyncState.initial;
+
+  @override
+  Future<void> connect({
+    required String url,
+    required String email,
+    required String password,
+    required bool register,
+  }) async {
+    state = succeeds
+        ? const SyncState(
+            status: SyncStatus.connected,
+            serverUrl: 'http://example.com',
+            userEmail: 'me@example.com',
+          )
+        : const SyncState(status: SyncStatus.error, errorMessage: 'nope');
+  }
+}
+
+/// Pushes SyncSettingsScreen on top of a distinguishable placeholder route
+/// (rather than as the app's only route), so a successful submit's
+/// Navigator.pop has somewhere observable to land back on - mirrors how
+/// notes_screen.dart actually reaches this screen, always via a push.
+Future<void> _pumpPushedOntoPlaceholder(
+  WidgetTester tester,
+  SyncNotifier notifier,
+) async {
+  final container = ProviderContainer(
+    overrides: [syncProvider.overrideWith(() => notifier)],
+  );
+  addTearDown(container.dispose);
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(
+                key: const Key('open_sync_settings'),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SyncSettingsScreen()),
+                ),
+                child: const Text('Main notes screen'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('open_sync_settings')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _fillAndSubmit(WidgetTester tester) async {
+  await tester.enterText(
+    find.byKey(const Key('sync_url_field')),
+    'http://example.com',
+  );
+  await tester.enterText(
+    find.byKey(const Key('sync_email_field')),
+    'me@example.com',
+  );
+  await tester.enterText(
+    find.byKey(const Key('sync_password_field')),
+    'hunter2',
+  );
+  await tester.tap(find.byKey(const Key('sync_submit_button')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUp(() {
     // SyncNotifier.build() fires off PbService.instance.restore(), which
@@ -230,6 +312,40 @@ void main() {
           tester.getTopLeft(find.byKey(const Key('sync_now_button'))).dy,
           tester.getTopLeft(find.byKey(const Key('sync_disconnect_button'))).dy,
         );
+      },
+    );
+  });
+
+  group('submitting the connect form', () {
+    testWidgets(
+      'a successful connect pops back to whatever screen pushed this one, '
+      'rather than staying on the "Connected to:" summary',
+      (tester) async {
+        await _pumpPushedOntoPlaceholder(
+          tester,
+          _ConnectingSyncNotifier(succeeds: true),
+        );
+
+        await _fillAndSubmit(tester);
+
+        expect(find.byType(SyncSettingsScreen), findsNothing);
+        expect(find.text('Main notes screen'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a failed connect stays on this screen, showing the error rather '
+      'than popping',
+      (tester) async {
+        await _pumpPushedOntoPlaceholder(
+          tester,
+          _ConnectingSyncNotifier(succeeds: false),
+        );
+
+        await _fillAndSubmit(tester);
+
+        expect(find.byType(SyncSettingsScreen), findsOneWidget);
+        expect(find.textContaining('Could not connect'), findsOneWidget);
       },
     );
   });

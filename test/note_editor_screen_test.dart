@@ -2,82 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
+import 'package:jotes/models/repeat_rule.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/note_editor_screen.dart';
 import 'package:jotes/widgets/note_body_editor.dart';
 
 void main() {
-  group('formatTimeUntilReminder', () {
-    final now = DateTime(2026, 1, 1, 12);
-
-    test('spells out days, hours, and minutes together with an Oxford '
-        'comma', () {
-      expect(
-        formatTimeUntilReminder(
-          now.add(const Duration(days: 2, hours: 4, minutes: 35)),
-          now: now,
-        ),
-        'in 2 days, 4 hours, and 35 minutes',
-      );
-    });
-
-    test('omits a zero-valued middle unit (hours) instead of showing '
-        '"0 hours"', () {
-      expect(
-        formatTimeUntilReminder(
-          now.add(const Duration(days: 2, minutes: 35)),
-          now: now,
-        ),
-        'in 2 days and 35 minutes',
-      );
-    });
-
-    test('singular day is not pluralized', () {
-      expect(
-        formatTimeUntilReminder(now.add(const Duration(days: 1)), now: now),
-        'in 1 day',
-      );
-    });
-
-    test('falls back to hours once under a day', () {
-      expect(
-        formatTimeUntilReminder(
-          now.add(const Duration(hours: 3, minutes: 30)),
-          now: now,
-        ),
-        'in 3 hours and 30 minutes',
-      );
-    });
-
-    test('falls back to minutes once under an hour', () {
-      expect(
-        formatTimeUntilReminder(now.add(const Duration(minutes: 45)), now: now),
-        'in 45 minutes',
-      );
-    });
-
-    test('singular minute is not pluralized', () {
-      expect(
-        formatTimeUntilReminder(now.add(const Duration(minutes: 1)), now: now),
-        'in 1 minute',
-      );
-    });
-
-    test('under a minute away', () {
-      expect(
-        formatTimeUntilReminder(now.add(const Duration(seconds: 30)), now: now),
-        'in less than a minute',
-      );
-    });
-  });
-
   _mainWidgetTests();
 }
 
 Note _existingNote({
   String body = 'One line',
   DateTime? reminderAt,
-  RepeatInterval repeatInterval = RepeatInterval.none,
+  RepeatRule? repeatRule,
 }) {
   final now = DateTime.now();
   return Note(
@@ -88,7 +25,7 @@ Note _existingNote({
     reminderAt: reminderAt,
     created: now,
     updated: now,
-    repeatInterval: repeatInterval,
+    repeatRule: repeatRule,
   );
 }
 
@@ -179,8 +116,11 @@ void _mainWidgetTests() {
   });
 
   testWidgets(
-    'setting a reminder shows a confirmation dialog with the chosen time, '
-    'requiring an explicit OK rather than auto-dismissing like a toast',
+    'tapping the reminder pill for a brand-new note opens New reminder, '
+    'pre-filled about an hour from now with no repeat and no delete icon '
+    '(nothing exists yet to remove), and Save persists it immediately - '
+    'not deferred until the screen is popped, and not discarded as an '
+    'empty note',
     (tester) async {
       final notifier = _RecordingNotesNotifier();
       final container = ProviderContainer(
@@ -198,67 +138,61 @@ void _mainWidgetTests() {
       await tester.tap(find.byTooltip('Set reminder'));
       await tester.pumpAndSettle();
 
-      // Confirm the date picker, then the time picker, each with their
-      // pre-filled initial value, then the repeat picker offered as part
-      // of the same flow (see _pickReminder) - "Does not repeat" here.
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('repeat_option_none')));
+      expect(find.text('New reminder'), findsOneWidget);
+      expect(find.text('Does not repeat'), findsOneWidget);
+      expect(find.byKey(const Key('reminder_edit_delete')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('reminder_edit_save')));
       await tester.pumpAndSettle();
 
-      expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.text('Reminder set'), findsOneWidget);
-
-      // Still up (not an auto-dismissing toast) until OK is tapped.
-      await tester.pump(const Duration(seconds: 5));
-      expect(find.byType(AlertDialog), findsOneWidget);
-
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(AlertDialog), findsNothing);
+      // Back on the note editor screen - never navigated further/popped
+      // it, so if the save were still deferred to PopScope this would be
+      // empty.
+      expect(find.text('New reminder'), findsNothing);
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.title, isEmpty);
+      expect(notifier.saved.single.body, isEmpty);
+      expect(notifier.saved.single.reminderAt, isNotNull);
+      expect(
+        notifier.saved.single.reminderAt!.isAfter(DateTime.now()),
+        isTrue,
+      );
+      expect(notifier.saved.single.repeatRule, isNull);
     },
   );
 
-  testWidgets('a brand-new note with only a reminder set (no title or body) is '
-      'saved and scheduled immediately, not deferred until the screen is '
-      'popped, and not discarded as an empty note', (tester) async {
-    final notifier = _RecordingNotesNotifier();
-    final container = ProviderContainer(
-      overrides: [notesProvider.overrideWith(() => notifier)],
-    );
-    addTearDown(container.dispose);
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: const MaterialApp(home: NoteEditorScreen()),
-      ),
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    'tapping the Date and Time rows opens their native pickers, and '
+    'confirming a choice does not auto-advance off the reminder screen',
+    (tester) async {
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Set reminder'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OK'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OK'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('repeat_option_none')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Set reminder'));
+      await tester.pumpAndSettle();
 
-    // Never navigated back / popped the screen - if the save were still
-    // deferred to PopScope, this would be empty.
-    expect(notifier.saved, hasLength(1));
-    expect(notifier.saved.single.title, isEmpty);
-    expect(notifier.saved.single.body, isEmpty);
-    expect(notifier.saved.single.reminderAt, isNotNull);
-  });
+      await tester.tap(find.byKey(const Key('reminder_edit_date')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('New reminder'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('reminder_edit_time')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('New reminder'), findsOneWidget);
+    },
+  );
 
   testWidgets(
-    'the repeat picker offered as part of setting a brand-new reminder '
-    'shows "Does not repeat" checked by default, and choosing Daily saves '
-    'both reminderAt and repeatInterval together in the same save',
+    'picking Daily from the Repeat row before saving shows it selected in '
+    'the sheet and updates the row, then carries both reminderAt and '
+    'repeatRule together in the same save',
     (tester) async {
       final notifier = _RecordingNotesNotifier();
       final container = ProviderContainer(
@@ -275,12 +209,9 @@ void _mainWidgetTests() {
 
       await tester.tap(find.byTooltip('Set reminder'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('OK'));
+      await tester.tap(find.byKey(const Key('reminder_edit_repeat')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Does not repeat'), findsOneWidget);
       expect(
         tester
             .widget<ListTile>(find.byKey(const Key('repeat_option_none')))
@@ -290,24 +221,63 @@ void _mainWidgetTests() {
 
       await tester.tap(find.byKey(const Key('repeat_option_daily')));
       await tester.pumpAndSettle();
-      // Dismiss the "Reminder set" confirmation dialog.
-      await tester.tap(find.text('OK'));
+
+      expect(find.text('Daily'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('reminder_edit_save')));
       await tester.pumpAndSettle();
 
       // A single save carrying both fields together, not a separate one
       // for the repeat setting.
       expect(notifier.saved, hasLength(1));
       expect(notifier.saved.single.reminderAt, isNotNull);
-      expect(notifier.saved.single.repeatInterval, RepeatInterval.daily);
+      expect(
+        notifier.saved.single.repeatRule,
+        RepeatRule.preset(RepeatFrequency.daily),
+      );
     },
   );
 
   testWidgets(
-    'tapping the reminder chip for an upcoming reminder offers to edit '
-    'or remove it, rather than removing it outright',
+    'tapping the close button discards any in-progress changes without '
+    'saving',
+    (tester) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: NoteEditorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Set reminder'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reminder_edit_repeat')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('repeat_option_daily')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('New reminder'), findsNothing);
+      expect(notifier.saved, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'tapping the reminder pill for an existing upcoming reminder opens '
+    'Edit reminder, pre-filled with its current date/time/repeat, with a '
+    'delete icon to remove it',
     (tester) async {
       final note = _existingNote(
-        reminderAt: DateTime.now().add(const Duration(hours: 1)),
+        reminderAt: DateTime.now().add(const Duration(hours: 3)),
+        repeatRule: RepeatRule.preset(RepeatFrequency.weekly),
       );
       await tester.pumpWidget(
         ProviderScope(
@@ -320,16 +290,14 @@ void _mainWidgetTests() {
       await tester.pumpAndSettle();
 
       expect(find.text('Edit reminder'), findsOneWidget);
-      expect(find.text('Reset reminder'), findsNothing);
-      expect(find.text('Remove reminder'), findsOneWidget);
-      expect(find.text('Repeat'), findsOneWidget);
-      expect(find.text('Does not repeat'), findsOneWidget);
+      expect(find.text('Weekly'), findsOneWidget);
+      expect(find.byKey(const Key('reminder_edit_delete')), findsOneWidget);
     },
   );
 
   testWidgets(
-    'choosing Repeat from the reminder options and picking Daily saves '
-    'immediately and reflects the new choice as the subtitle next time',
+    'tapping the delete icon removes the reminder and saves immediately, '
+    'not deferred until the screen is popped',
     (tester) async {
       final note = _existingNote(
         reminderAt: DateTime.now().add(const Duration(hours: 1)),
@@ -349,46 +317,7 @@ void _mainWidgetTests() {
 
       await tester.tap(find.byIcon(Icons.alarm));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('reminder_options_repeat')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('repeat_option_daily')));
-      await tester.pumpAndSettle();
-
-      // Never navigated back / popped the screen - same "saved immediately,
-      // not deferred to PopScope" reasoning as the Remove test above.
-      expect(notifier.saved, hasLength(1));
-      expect(notifier.saved.single.repeatInterval, RepeatInterval.daily);
-
-      await tester.tap(find.byIcon(Icons.alarm));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Daily'), findsOneWidget);
-    },
-  );
-
-  testWidgets(
-    'choosing Remove from the reminder options clears the chip and saves '
-    'immediately, not deferred until the screen is popped',
-    (tester) async {
-      final note = _existingNote(
-        reminderAt: DateTime.now().add(const Duration(hours: 1)),
-      );
-      final notifier = _RecordingNotesNotifier();
-      final container = ProviderContainer(
-        overrides: [notesProvider.overrideWith(() => notifier)],
-      );
-      addTearDown(container.dispose);
-      await tester.pumpWidget(
-        UncontrolledProviderScope(
-          container: container,
-          child: MaterialApp(home: NoteEditorScreen(existing: note)),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.alarm));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Remove reminder'));
+      await tester.tap(find.byKey(const Key('reminder_edit_delete')));
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.alarm), findsNothing);
@@ -402,10 +331,10 @@ void _mainWidgetTests() {
   );
 
   testWidgets(
-    'the reminder chip for an expired reminder offers to reset it (not '
-    '"edit", since it is no longer pending), and resetting it through the '
-    "picker succeeds instead of crashing on the picker's own "
-    'initialDate/firstDate constraint',
+    'the reminder pill for an expired reminder still opens Edit reminder, '
+    'pre-filled about an hour from now rather than the stale past time '
+    "(which would crash the date picker's own initialDate/firstDate "
+    'constraint), and Save succeeds with a new future time',
     (tester) async {
       final note = _existingNote(
         reminderAt: DateTime.now().subtract(const Duration(days: 1)),
@@ -423,27 +352,15 @@ void _mainWidgetTests() {
       );
       await tester.pumpAndSettle();
 
-      // The chip itself should already reflect the expired state.
+      // The pill itself should already reflect the expired state.
       expect(find.byIcon(Icons.alarm_off), findsOneWidget);
 
       await tester.tap(find.byIcon(Icons.alarm_off));
       await tester.pumpAndSettle();
 
-      expect(find.text('Reset reminder'), findsOneWidget);
-      expect(find.text('Edit reminder'), findsNothing);
+      expect(find.text('Edit reminder'), findsOneWidget);
 
-      await tester.tap(find.text('Reset reminder'));
-      await tester.pumpAndSettle();
-      // Confirming the date and time pickers must not throw despite the
-      // note's existing reminder being in the past.
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('repeat_option_none')));
-      await tester.pumpAndSettle();
-      // Dismiss the "Reminder set" confirmation dialog.
-      await tester.tap(find.text('OK'));
+      await tester.tap(find.byKey(const Key('reminder_edit_save')));
       await tester.pumpAndSettle();
 
       expect(notifier.saved, isNotEmpty);

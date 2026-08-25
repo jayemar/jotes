@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
+import 'package:jotes/models/repeat_rule.dart';
 import 'package:jotes/services/link_service.dart';
 import 'package:jotes/widgets/note_card.dart';
 
@@ -10,6 +11,7 @@ Note _note({
   String body = '',
   DateTime? reminderAt,
   bool reminderResolved = false,
+  RepeatRule? repeatRule,
 }) {
   final now = DateTime.now();
   return Note(
@@ -21,6 +23,7 @@ Note _note({
     created: now,
     updated: now,
     reminderResolved: reminderResolved,
+    repeatRule: repeatRule,
   );
 }
 
@@ -265,6 +268,34 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(chipColor(tester), Colors.red.withAlpha(40));
+    });
+  });
+
+  group('reminder chip repeat glyph (see _ReminderChip.repeats)', () {
+    testWidgets('a repeating reminder shows a small repeat icon inside the '
+        'chip', (tester) async {
+      await _pump(
+        tester,
+        _note(
+          reminderAt: DateTime.now().add(const Duration(hours: 1)),
+          repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.repeat), findsOneWidget);
+    });
+
+    testWidgets('a non-repeating reminder shows no repeat icon', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        _note(reminderAt: DateTime.now().add(const Duration(hours: 1))),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.repeat), findsNothing);
     });
   });
 }

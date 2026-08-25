@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import '../models/note.dart';
+import '../models/repeat_rule.dart';
 import 'background_sync_service.dart';
 import 'db_service.dart';
 import 'snooze_settings.dart';
@@ -475,6 +476,70 @@ class NotificationService {
     }
   }
 
+  /// Rolls every overdue *repeating* reminder forward to its next future
+  /// occurrence and reschedules it - regardless of whether the previous
+  /// occurrence was ever dismissed/handled (Note.reminderResolved is
+  /// ignored entirely here, unlike restoreUnresolvedReminders' own loop
+  /// below), so a repeating reminder keeps producing new notifications on
+  /// its own schedule instead of silently going stale the moment one
+  /// occurrence gets ignored. Deliberately does not cancel() whatever's
+  /// currently showing for the previous occurrence - that stays exactly as
+  /// it is (still dismissible/snoozable if the user gets to it later) until
+  /// either the user acts on it or the next occurrence's own notification
+  /// naturally supersedes it (same stable notificationId - see
+  /// Note.notificationId), the same way a real repeating alarm only ever
+  /// shows its latest miss rather than stacking every one up.
+  ///
+  /// Called from [restoreUnresolvedReminders] (see its own call sites -
+  /// app startup, boot-restore, the periodic background refresh) before
+  /// that function's own overdue query runs, so a repeating note rolled
+  /// forward here (now future-dated) doesn't also get caught by that
+  /// query and re-shown as if it were a stale non-repeating reminder.
+  Future<void> advanceOverdueRepeatingReminders() async {
+    if (kIsWeb) return;
+    final overdue = await DbService.instance.withOverdueReminders();
+    for (final note in overdue) {
+      final rule = note.repeatRule;
+      final reminderAt = note.reminderAt;
+      if (rule == null || reminderAt == null) continue;
+
+      try {
+        final next = nextRuleOccurrence(
+          reminderAt,
+          note.repeatOccurrenceNumber,
+          rule,
+        );
+        // The rule's own RepeatEnd condition has now been reached - clear
+        // it so this note falls through to the normal (non-repeating)
+        // overdue-reminder handling below, in this same call, instead of
+        // silently never being surfaced again. reminderAt/reminderResolved
+        // are deliberately left untouched here - whether the user ever
+        // saw/acted on this last occurrence is unrelated to the rule
+        // itself running out.
+        final advanced = next == null
+            ? note.copyWith(repeatRule: null, updated: DateTime.now())
+            : note.copyWith(
+                reminderAt: next.reminderAt,
+                reminderResolved: false,
+                repeatOccurrenceNumber: next.occurrenceNumber,
+                updated: DateTime.now(),
+              );
+        await DbService.instance.upsert(advanced);
+        if (next != null) await schedule(advanced);
+        try {
+          await BackgroundSyncService.instance.enqueue();
+        } catch (_) {
+          // Best-effort - see BackgroundSyncService's own doc comment; the
+          // local write above already succeeded.
+        }
+      } catch (_) {
+        // One note failing here (e.g. a transient scheduling error) must
+        // not cost every other repeating note in this list its own
+        // advance - same reasoning as rescheduleAll's per-note isolation.
+      }
+    }
+  }
+
   /// Re-posts any overdue reminder the user hasn't resolved yet (Dismiss or
   /// Snooze) - covers both "never delivered at all" and "was delivered but
   /// is still sitting unacknowledged," which look identical from here
@@ -485,6 +550,7 @@ class NotificationService {
   /// for a reminder the user simply hasn't gotten to yet.
   Future<void> restoreUnresolvedReminders() async {
     if (kIsWeb) return;
+    await advanceOverdueRepeatingReminders();
     final overdue = await DbService.instance.withOverdueReminders();
     if (overdue.isEmpty) return;
     // Skip anything already in the tray, so a normal app-open (where the

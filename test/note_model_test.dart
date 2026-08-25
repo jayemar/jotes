@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
+import 'package:jotes/models/repeat_rule.dart';
 
 Note _note({
   String id = 'n1',
@@ -7,7 +8,8 @@ Note _note({
   String body = '',
   DateTime? reminderAt,
   bool reminderResolved = false,
-  RepeatInterval repeatInterval = RepeatInterval.none,
+  RepeatRule? repeatRule,
+  int repeatOccurrenceNumber = 1,
 }) {
   final now = DateTime.now();
   return Note(
@@ -18,7 +20,8 @@ Note _note({
     created: now,
     updated: now,
     reminderResolved: reminderResolved,
-    repeatInterval: repeatInterval,
+    repeatRule: repeatRule,
+    repeatOccurrenceNumber: repeatOccurrenceNumber,
   );
 }
 
@@ -140,43 +143,6 @@ void main() {
     });
   });
 
-  group('nextOccurrence', () {
-    final from = DateTime(2026, 1, 31, 9, 30);
-
-    test('none leaves the time unchanged', () {
-      expect(nextOccurrence(from, RepeatInterval.none), from);
-    });
-
-    test('daily adds one day', () {
-      expect(
-        nextOccurrence(from, RepeatInterval.daily),
-        DateTime(2026, 2, 1, 9, 30),
-      );
-    });
-
-    test('weekly adds seven days', () {
-      expect(
-        nextOccurrence(from, RepeatInterval.weekly),
-        DateTime(2026, 2, 7, 9, 30),
-      );
-    });
-
-    test('monthly rolls Jan 31 into the following month via DateTime\'s own '
-        'normalization, not clamped to Feb\'s last day', () {
-      expect(
-        nextOccurrence(from, RepeatInterval.monthly),
-        DateTime(2026, 3, 3, 9, 30),
-      );
-    });
-
-    test('yearly adds one year, same month/day/time', () {
-      expect(
-        nextOccurrence(from, RepeatInterval.yearly),
-        DateTime(2027, 1, 31, 9, 30),
-      );
-    });
-  });
-
   group('noteAfterDismiss', () {
     test('a non-repeating reminder is just marked resolved, reminderAt '
         'unchanged', () {
@@ -190,65 +156,130 @@ void main() {
     });
 
     test('a repeating reminder rolls reminderAt forward and stays '
-        'unresolved for the fresh cycle', () {
-      final reminderAt = DateTime(2026, 7, 20, 9);
+        'unresolved for the fresh cycle, when dismissed shortly after '
+        'firing', () {
+      final reminderAt = DateTime.now().subtract(const Duration(minutes: 5));
       final note = _note(
         reminderAt: reminderAt,
-        repeatInterval: RepeatInterval.daily,
+        repeatRule: RepeatRule.preset(RepeatFrequency.daily),
       );
 
       final result = noteAfterDismiss(note);
 
       expect(result.reminderResolved, isFalse);
-      expect(result.reminderAt, DateTime(2026, 7, 21, 9));
+      expect(result.reminderAt, reminderAt.add(const Duration(days: 1)));
+      expect(result.repeatOccurrenceNumber, 2);
+    });
+
+    test('a repeating reminder dismissed several days late skips straight '
+        'to the next occurrence that is actually still ahead, not just one '
+        'step forward from the original time (which could still be in the '
+        'past)', () {
+      final reminderAt = DateTime.now().subtract(
+        const Duration(days: 3, minutes: 5),
+      );
+      final note = _note(
+        reminderAt: reminderAt,
+        repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+      );
+
+      final result = noteAfterDismiss(note);
+
+      expect(result.reminderResolved, isFalse);
+      expect(result.reminderAt!.isAfter(DateTime.now()), isTrue);
     });
 
     test('a repeating note with no reminderAt at all is just marked '
         'resolved - nothing to advance', () {
-      final note = _note(repeatInterval: RepeatInterval.daily);
+      final note = _note(repeatRule: RepeatRule.preset(RepeatFrequency.daily));
 
       final result = noteAfterDismiss(note);
 
       expect(result.reminderResolved, isTrue);
       expect(result.reminderAt, isNull);
     });
+
+    test('a rule that has just run its own course (RepeatEnd reached) is '
+        'marked resolved and its repeatRule cleared, same as a '
+        'non-repeating reminder from here on', () {
+      final reminderAt = DateTime.now().subtract(const Duration(minutes: 5));
+      final note = _note(
+        reminderAt: reminderAt,
+        repeatRule: RepeatRule(
+          frequency: RepeatFrequency.daily,
+          end: const RepeatEndAfterCount(1),
+        ),
+        repeatOccurrenceNumber: 1,
+      );
+
+      final result = noteAfterDismiss(note);
+
+      expect(result.reminderResolved, isTrue);
+      expect(result.repeatRule, isNull);
+      // The reminderAt itself is left as whatever it already was - only
+      // reminderResolved/repeatRule change once the rule ends.
+      expect(result.reminderAt, reminderAt);
+    });
   });
 
-  group('Note repeatInterval round-trips', () {
+  group('Note.repeatRule round-trips', () {
     test('through toMap/fromMap (local storage)', () {
-      final note = _note(repeatInterval: RepeatInterval.weekly);
+      final rule = RepeatRule(
+        frequency: RepeatFrequency.weekly,
+        interval: 2,
+        weekdays: const {1, 3},
+        end: const RepeatEndAfterCount(5),
+      );
+      final note = _note(repeatRule: rule, repeatOccurrenceNumber: 3);
 
       final restored = Note.fromMap(note.toMap());
 
-      expect(restored.repeatInterval, RepeatInterval.weekly);
+      expect(restored.repeatRule, rule);
+      expect(restored.repeatOccurrenceNumber, 3);
     });
 
-    test('fromMap falls back to none for a missing repeat_interval value '
-        '(a note saved before this field existed)', () {
-      final map = _note().toMap()..remove('repeat_interval');
+    test('a null repeatRule (does not repeat) round-trips as null', () {
+      final note = _note();
 
-      expect(Note.fromMap(map).repeatInterval, RepeatInterval.none);
+      final restored = Note.fromMap(note.toMap());
+
+      expect(restored.repeatRule, isNull);
+    });
+
+    test('fromMap falls back to no rule and occurrence 1 for a note saved '
+        'before these fields existed', () {
+      final map = _note().toMap()
+        ..remove('repeat_rule')
+        ..remove('repeat_occurrence_number');
+
+      final restored = Note.fromMap(map);
+
+      expect(restored.repeatRule, isNull);
+      expect(restored.repeatOccurrenceNumber, 1);
     });
 
     test('through toPocketBase/fromPocketBase (server sync)', () {
-      final note = _note(repeatInterval: RepeatInterval.yearly);
+      final rule = RepeatRule.preset(RepeatFrequency.yearly);
+      final note = _note(repeatRule: rule, repeatOccurrenceNumber: 4);
 
       final restored = Note.fromPocketBase({
         'id': note.id,
         ...note.toPocketBase(),
       });
 
-      expect(restored.repeatInterval, RepeatInterval.yearly);
+      expect(restored.repeatRule, rule);
+      expect(restored.repeatOccurrenceNumber, 4);
     });
 
-    test('fromPocketBase falls back to none for an empty repeat_interval '
+    test('fromPocketBase falls back to no rule for an empty repeat_rule '
         'value (an un-migrated or untouched server record)', () {
       final restored = Note.fromPocketBase({
         'id': 'n1',
-        'repeat_interval': '',
+        'repeat_rule': '',
       });
 
-      expect(restored.repeatInterval, RepeatInterval.none);
+      expect(restored.repeatRule, isNull);
+      expect(restored.repeatOccurrenceNumber, 1);
     });
   });
 }

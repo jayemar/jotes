@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
+import 'package:jotes/models/repeat_rule.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/services/notification_service.dart';
 import 'package:jotes/widgets/reminder_popup.dart';
 
 Note _note({
   DateTime? reminderAt,
-  RepeatInterval repeatInterval = RepeatInterval.none,
+  RepeatRule? repeatRule,
 }) {
   final now = DateTime.now();
   return Note(
@@ -18,7 +19,7 @@ Note _note({
     reminderAt: reminderAt,
     created: now,
     updated: now,
-    repeatInterval: repeatInterval,
+    repeatRule: repeatRule,
   );
 }
 
@@ -148,7 +149,7 @@ void main() {
       final reminderAt = DateTime.now().add(const Duration(hours: 1));
       final note = _note(
         reminderAt: reminderAt,
-        repeatInterval: RepeatInterval.daily,
+        repeatRule: RepeatRule.preset(RepeatFrequency.daily),
       );
 
       showReminderPopup(host.context, host.ref, note);
@@ -161,7 +162,7 @@ void main() {
       expect(host.recorder.saved, hasLength(1));
       final saved = host.recorder.saved.single;
       expect(saved.reminderResolved, isFalse);
-      expect(saved.reminderAt, nextOccurrence(reminderAt, RepeatInterval.daily));
+      expect(saved.reminderAt, reminderAt.add(const Duration(days: 1)));
     },
   );
 

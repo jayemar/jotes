@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/note.dart';
 import '../providers/app_info_provider.dart';
 import '../providers/notes_provider.dart';
+import '../providers/notes_view_provider.dart';
 import '../providers/sync_provider.dart';
 import '../services/autostart_service.dart';
 import '../services/keep_import_service.dart';
@@ -25,6 +26,17 @@ import 'reminders_screen.dart';
 import 'settings_screen.dart';
 import 'sync_settings_screen.dart';
 
+/// Icon for the search field's reminder-visibility button, reflecting the
+/// current NoteReminderFilter - "visibility" for [NoteReminderFilter.all]
+/// (everything's visible), an eye-off for [withoutReminders] (reminder
+/// notes specifically hidden from view), and an alarm for [withReminders]
+/// (only reminder notes shown).
+IconData _reminderVisibilityIcon(NoteReminderFilter filter) => switch (filter) {
+  NoteReminderFilter.all => Icons.visibility_outlined,
+  NoteReminderFilter.withoutReminders => Icons.visibility_off_outlined,
+  NoteReminderFilter.withReminders => Icons.alarm,
+};
+
 class NotesScreen extends ConsumerStatefulWidget {
   const NotesScreen({super.key});
 
@@ -38,6 +50,14 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchQuery = '';
   Timer? _reminderChipRefreshTimer;
+
+  /// Notes currently playing their fade/shrink-out exit animation (see
+  /// _RemovableNoteCard) - still present in notesProvider's own list (the
+  /// real delete is deferred to _finishDelete, once each card's own
+  /// animation completes), just visually on their way out. A confirmation
+  /// that the deletion actually took place, not just a instantaneous
+  /// disappearance - see _deleteSelected's own doc comment.
+  final Set<String> _pendingDeleteIds = {};
 
   bool get _selectionMode => _selectedIds.isNotEmpty;
 
@@ -170,13 +190,125 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
         .toList();
   }
 
-  Future<void> _deleteSelected(List<Note> notes) async {
-    final notifier = ref.read(notesProvider.notifier);
-    final selected = notes.where((n) => _selectedIds.contains(n.id)).toList();
+  /// Bottom sheet of checkmarked options for an enum with a `label` field -
+  /// shared by _pickLayout/_pickSortOrder below, the same "checkmark
+  /// ListTiles in a bottom sheet" pattern reminder_edit_screen.dart's own
+  /// repeat picker uses. _pickReminderFilter below uses its own anchored
+  /// popup instead (see its own doc comment for why).
+  Future<T?> _selectOption<T>({
+    required List<T> options,
+    required T current,
+    required String Function(T) label,
+    required String Function(T) keySuffix,
+  }) {
+    return showModalBottomSheet<T>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final option in options)
+              ListTile(
+                key: Key('notes_view_option_${keySuffix(option)}'),
+                title: Text(label(option)),
+                trailing: option == current ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(sheetContext, option),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Unlike _selectOption's bottom sheet (used by layout/sort below), the
+  /// reminder filter opens as a popup anchored right next to the icon that
+  /// was tapped - it's reached far more often (right in the search field,
+  /// see reminder_visibility_button below) so a heavier bottom sheet for a
+  /// 3-option choice felt disproportionate. [anchorContext] should be the
+  /// BuildContext of the specific tapped widget, so the popup lands beside
+  /// it rather than at some fixed screen position.
+  Future<void> _pickReminderFilter(BuildContext anchorContext) async {
+    final current = ref.read(notesViewProvider).filter;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final button = anchorContext.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final selected = await showMenu<NoteReminderFilter>(
+      context: context,
+      position: position,
+      items: [
+        for (final filter in NoteReminderFilter.values)
+          PopupMenuItem<NoteReminderFilter>(
+            key: Key('notes_view_option_${filter.name}'),
+            value: filter,
+            child: Row(
+              children: [
+                Expanded(child: Text(filter.label)),
+                if (filter == current) const Icon(Icons.check, size: 18),
+              ],
+            ),
+          ),
+      ],
+    );
+    if (selected == null) return;
+    await ref.read(notesViewProvider.notifier).setFilter(selected);
+  }
+
+  Future<void> _pickLayout() async {
+    final current = ref.read(notesViewProvider).layout;
+    final selected = await _selectOption<NoteLayout>(
+      options: NoteLayout.values,
+      current: current,
+      label: (l) => l.label,
+      keySuffix: (l) => l.name,
+    );
+    if (selected == null) return;
+    await ref.read(notesViewProvider.notifier).setLayout(selected);
+  }
+
+  Future<void> _pickSortOrder() async {
+    final current = ref.read(notesViewProvider).sortOrder;
+    final selected = await _selectOption<NoteSortOrder>(
+      options: NoteSortOrder.values,
+      current: current,
+      label: (s) => s.label,
+      keySuffix: (s) => s.name,
+    );
+    if (selected == null) return;
+    await ref.read(notesViewProvider.notifier).setSortOrder(selected);
+  }
+
+  /// Marks the selected notes for removal rather than deleting them
+  /// immediately - each one's own _RemovableNoteCard plays a fade/shrink-out
+  /// animation first (with the rest of the grid/list reflowing around it as
+  /// it shrinks away), and only calls back to actually delete it (see
+  /// _finishDelete) once that animation finishes. A visual confirmation
+  /// that the deletion took place, rather than notes just instantaneously
+  /// vanishing with the remaining ones silently snapping into new
+  /// positions.
+  void _deleteSelected(List<Note> notes) {
+    final selectedIds = notes
+        .where((n) => _selectedIds.contains(n.id))
+        .map((n) => n.id)
+        .toSet();
     _clearSelection();
-    for (final note in selected) {
-      await notifier.delete(note);
-    }
+    setState(() => _pendingDeleteIds.addAll(selectedIds));
+  }
+
+  /// Called once [note]'s own exit animation completes - see
+  /// _deleteSelected's own doc comment for why the real delete waits until
+  /// here instead of happening up front.
+  Future<void> _finishDelete(Note note) async {
+    await ref.read(notesProvider.notifier).delete(note);
+    if (mounted) setState(() => _pendingDeleteIds.remove(note.id));
   }
 
   Future<void> _recolorSelected(List<Note> notes) async {
@@ -247,6 +379,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   ) {
     final colorScheme = Theme.of(context).colorScheme;
     final iconColor = colorScheme.onSurfaceVariant;
+    final viewState = ref.watch(notesViewProvider);
     final searchFieldColor = noteColorFor(context, 0);
     final searchFieldTextColor =
         ThemeData.estimateBrightnessForColor(searchFieldColor) ==
@@ -305,28 +438,59 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   : Container(
                       height: 42,
                       alignment: Alignment.center,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.only(left: 16, right: 8),
                       decoration: BoxDecoration(
                         color: searchFieldColor,
                         borderRadius: BorderRadius.circular(21),
                       ),
-                      child: TextField(
-                        key: const Key('search_field'),
-                        controller: _searchCtrl,
-                        textAlignVertical: TextAlignVertical.center,
-                        decoration: InputDecoration(
-                          hintText: 'Search notes',
-                          hintStyle: TextStyle(
-                            color: searchFieldTextColor.withAlpha(140),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              key: const Key('search_field'),
+                              controller: _searchCtrl,
+                              textAlignVertical: TextAlignVertical.center,
+                              decoration: InputDecoration(
+                                hintText: 'Search notes',
+                                hintStyle: TextStyle(
+                                  color: searchFieldTextColor.withAlpha(140),
+                                ),
+                                border: InputBorder.none,
+                                isCollapsed: true,
+                              ),
+                              style: TextStyle(
+                                color: searchFieldTextColor,
+                                fontSize: 16,
+                              ),
+                              onChanged: (v) =>
+                                  setState(() => _searchQuery = v),
+                            ),
                           ),
-                          border: InputBorder.none,
-                          isCollapsed: true,
-                        ),
-                        style: TextStyle(
-                          color: searchFieldTextColor,
-                          fontSize: 16,
-                        ),
-                        onChanged: (v) => setState(() => _searchQuery = v),
+                          // Quick access to the same reminder filter as the
+                          // overflow menu's own "Filter" option - right in
+                          // the search field, since "which notes am I even
+                          // looking at" is a more immediate question than
+                          // the overflow menu's other two options (layout,
+                          // sort), which don't change *which* notes show.
+                          Tooltip(
+                            message: viewState.filter.label,
+                            child: Builder(
+                              builder: (iconContext) => InkWell(
+                                key: const Key('reminder_visibility_button'),
+                                customBorder: const CircleBorder(),
+                                onTap: () => _pickReminderFilter(iconContext),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(8),
+                                  child: Icon(
+                                    _reminderVisibilityIcon(viewState.filter),
+                                    color: searchFieldTextColor,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
               actions: _selectionMode
@@ -390,6 +554,52 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                           ),
                         ),
                       ),
+                      Builder(
+                        builder: (menuButtonContext) => PopupMenuButton<String>(
+                          key: const Key('notes_view_menu'),
+                          icon: Icon(Icons.more_vert, color: iconColor),
+                          tooltip: 'View options',
+                          onSelected: (value) {
+                            switch (value) {
+                              case 'filter':
+                                _pickReminderFilter(menuButtonContext);
+                              case 'layout':
+                                _pickLayout();
+                              case 'sort':
+                                _pickSortOrder();
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: 'filter',
+                              child: ListTile(
+                                leading: const Icon(Icons.filter_list_outlined),
+                                title: const Text('Filter'),
+                                subtitle: Text(viewState.filter.label),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'layout',
+                              child: ListTile(
+                                leading: const Icon(Icons.view_agenda_outlined),
+                                title: const Text('Layout'),
+                                subtitle: Text(viewState.layout.label),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'sort',
+                              child: ListTile(
+                                leading: const Icon(Icons.sort),
+                                title: const Text('Sort by'),
+                                subtitle: Text(viewState.sortOrder.label),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
             ),
             notesAsync.when(
@@ -400,12 +610,16 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                 child: Center(child: Text('Error loading notes: $e')),
               ),
               data: (notes) => _NoteGrid(
-                notes: _filterNotes(notes),
+                notes: applyNotesView(_filterNotes(notes), viewState),
+                layout: viewState.layout,
                 selectedIds: _selectedIds,
                 selectionMode: _selectionMode,
                 searching: _searchQuery.isNotEmpty,
+                filtered: viewState.filter != NoteReminderFilter.all,
+                pendingDeleteIds: _pendingDeleteIds,
                 onToggleSelection: _toggleSelection,
                 onOpen: (note) => _openNote(context, ref, note),
+                onRemoved: _finishDelete,
               ),
             ),
           ],
@@ -671,30 +885,45 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
 
 class _NoteGrid extends StatelessWidget {
   final List<Note> notes;
+  final NoteLayout layout;
   final Set<String> selectedIds;
   final bool selectionMode;
   final bool searching;
+  // Whether NotesViewState.filter is narrowing the list (independent of
+  // [searching]) - lets the empty state say "no notes match this filter"
+  // instead of the misleading "No notes yet" when e.g. "With reminders" is
+  // selected and none happen to have one, or vice versa.
+  final bool filtered;
+  final Set<String> pendingDeleteIds;
   final void Function(String id) onToggleSelection;
   final void Function(Note note) onOpen;
+  final void Function(Note note) onRemoved;
 
   const _NoteGrid({
     required this.notes,
+    required this.layout,
     required this.selectedIds,
     required this.selectionMode,
     required this.searching,
+    required this.filtered,
+    required this.pendingDeleteIds,
     required this.onToggleSelection,
     required this.onOpen,
+    required this.onRemoved,
   });
 
   @override
   Widget build(BuildContext context) {
     if (notes.isEmpty) {
+      final message = searching
+          ? 'No notes match your search.'
+          : filtered
+          ? 'No notes match this filter.'
+          : 'No notes yet.\nTap + to create one.';
       return SliverFillRemaining(
         child: Center(
           child: Text(
-            searching
-                ? 'No notes match your search.'
-                : 'No notes yet.\nTap + to create one.',
+            message,
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -705,25 +934,119 @@ class _NoteGrid extends StatelessWidget {
       );
     }
 
-    return SliverPadding(
-      padding: const EdgeInsets.all(8),
-      sliver: SliverMasonryGrid(
-        gridDelegate: const SliverSimpleGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 180,
+    // Keyed by note id (not the default positional identity) so each
+    // card's own _RemovableNoteCard state - specifically, whether it's
+    // mid-animation - stays correctly attached to that note as the
+    // underlying list changes around it, rather than getting shuffled onto
+    // a different note when one ahead of it is removed.
+    Widget cardFor(Note note) => _RemovableNoteCard(
+      key: ValueKey(note.id),
+      removing: pendingDeleteIds.contains(note.id),
+      onRemoved: () => onRemoved(note),
+      child: NoteCard(
+        note: note,
+        selected: selectedIds.contains(note.id),
+        selectionMode: selectionMode,
+        onTap: () => selectionMode ? onToggleSelection(note.id) : onOpen(note),
+        onLongPress: () => onToggleSelection(note.id),
+      ),
+    );
+
+    return switch (layout) {
+      NoteLayout.card => SliverPadding(
+        padding: const EdgeInsets.all(8),
+        sliver: SliverMasonryGrid(
+          // Keyed on the ordered note ids: RenderSliverMasonryGrid caches
+          // each child's column assignment (crossAxisIndex) on its own
+          // parent data, and when a child survives a rebuild via its own
+          // key (see cardFor's ValueKey(note.id) below), it reuses that
+          // *old* cached column instead of recomputing it - fine as long
+          // as the list only ever grows/shrinks in place, but this app's
+          // default sort is "last edited, newest first", so editing any
+          // note (even just checking off a checklist item) reorders the
+          // whole list. A note that jumps to a new position while keeping
+          // its stale column desyncs that column's height bookkeeping for
+          // everything laid out after it, producing a column-sized blank
+          // gap (reproduced directly against the package's own source -
+          // see computeFirstChildParentData in RenderSliverMasonryGrid.
+          // performLayout). Changing this key whenever the id order
+          // changes forces a brand-new RenderSliverMasonryGrid with no
+          // retained children/cached columns, sidestepping the bug
+          // entirely rather than patching around its internals.
+          key: ValueKey(notes.map((n) => n.id).join(',')),
+          gridDelegate: const SliverSimpleGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 180,
+          ),
+          mainAxisSpacing: 8,
+          crossAxisSpacing: 8,
+          delegate: SliverChildBuilderDelegate(
+            (context, i) => cardFor(notes[i]),
+            childCount: notes.length,
+          ),
         ),
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        delegate: SliverChildBuilderDelegate((context, i) {
-          final note = notes[i];
-          return NoteCard(
-            note: note,
-            selected: selectedIds.contains(note.id),
-            selectionMode: selectionMode,
-            onTap: () =>
-                selectionMode ? onToggleSelection(note.id) : onOpen(note),
-            onLongPress: () => onToggleSelection(note.id),
-          );
-        }, childCount: notes.length),
+      ),
+      // A single full-width column, one note after another - the same
+      // NoteCard as the card layout, just not packed side by side into
+      // columns.
+      NoteLayout.list => SliverPadding(
+        padding: const EdgeInsets.all(8),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, i) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: cardFor(notes[i]),
+            ),
+            childCount: notes.length,
+          ),
+        ),
+      ),
+    };
+  }
+}
+
+/// Shrinks and fades [child] out in place, then calls [onRemoved] - the
+/// visual "confirmation a deletion took place" _deleteSelected's own doc
+/// comment describes, shared by both the card and list layouts. Deliberately
+/// just a fade/shrink rather than an animated slide-to-fill-the-gap: the
+/// card layout's staggered masonry packing (SliverMasonryGrid, variable
+/// card heights) has no built-in animated-reflow widget the way a plain
+/// fixed-height grid or list would (see AnimatedList/SliverAnimatedGrid),
+/// and building custom reflow-animation logic just for that one layout
+/// would leave the two layouts behaving inconsistently - so both simply
+/// shrink/fade the removed card out, then let the grid/list snap to its new
+/// layout on the very next frame, once [onRemoved] actually removes the
+/// note from the underlying data.
+class _RemovableNoteCard extends StatelessWidget {
+  final Widget child;
+  final bool removing;
+  final VoidCallback onRemoved;
+
+  const _RemovableNoteCard({
+    super.key,
+    required this.child,
+    required this.removing,
+    required this.onRemoved,
+  });
+
+  static const _duration = Duration(milliseconds: 220);
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedScale(
+      scale: removing ? 0.7 : 1,
+      duration: _duration,
+      curve: Curves.easeIn,
+      child: AnimatedOpacity(
+        opacity: removing ? 0 : 1,
+        duration: _duration,
+        curve: Curves.easeIn,
+        // Only wired up while actually removing - AnimatedOpacity's onEnd
+        // also fires after any other opacity transition (there are none
+        // here, but future-proofing this against a stray unrelated
+        // rebuild-triggered no-op transition calling onRemoved is why this
+        // isn't unconditional).
+        onEnd: removing ? onRemoved : null,
+        child: child,
       ),
     );
   }

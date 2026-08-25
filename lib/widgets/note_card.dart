@@ -85,6 +85,7 @@ class NoteCard extends StatelessWidget {
                   _ReminderChip(
                     reminderAt: note.reminderAt!,
                     resolved: note.reminderResolved,
+                    repeats: note.repeatRule != null,
                     textColor: textColor,
                   ),
                 ],
@@ -255,11 +256,17 @@ class _ChecklistPreviewRow extends StatelessWidget {
 class _ReminderChip extends StatelessWidget {
   final DateTime reminderAt;
   final bool resolved;
+  // Whether Note.repeatRule is set - shown as a small repeat glyph inside
+  // the chip so a recurring reminder reads as such at a glance, not just
+  // like any other one-off reminder (see the same reasoning in
+  // reminders_screen.dart's own list item).
+  final bool repeats;
   final Color textColor;
 
   const _ReminderChip({
     required this.reminderAt,
     required this.resolved,
+    required this.repeats,
     required this.textColor,
   });
 
@@ -292,6 +299,10 @@ class _ReminderChip extends StatelessWidget {
             DateFormat('MMM d, h:mm a').format(reminderAt),
             style: TextStyle(fontSize: 11, color: textColor),
           ),
+          if (repeats) ...[
+            const SizedBox(width: 4),
+            Icon(Icons.repeat, size: 12, color: textColor),
+          ],
         ],
       ),
     );

@@ -4,49 +4,18 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../models/note.dart';
+import '../models/repeat_rule.dart';
 import '../providers/notes_provider.dart';
 import '../services/markdown_export_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_body_editor.dart';
+import 'reminder_edit_screen.dart';
 
 const _uuid = Uuid();
-
-/// Human-readable "in X, Y, and Z" breakdown of how long until [reminderAt]
-/// (e.g. "in 2 days, 4 hours, and 35 minutes"), used alongside the absolute
-/// time in the confirmation snackbar so it's clear at a glance whether e.g.
-/// "3:00 PM" means later today or a week away. Zero-valued units are
-/// omitted rather than shown as "0 hours" etc. Always positive in practice -
-/// reminders can only be set in the future (see _pickReminder's
-/// firstDate: now).
-@visibleForTesting
-String formatTimeUntilReminder(DateTime reminderAt, {DateTime? now}) {
-  final diff = reminderAt.difference(now ?? DateTime.now());
-  final days = diff.inDays;
-  final hours = diff.inHours % 24;
-  final minutes = diff.inMinutes % 60;
-
-  final parts = <String>[
-    if (days > 0) '$days day${days == 1 ? '' : 's'}',
-    if (hours > 0) '$hours hour${hours == 1 ? '' : 's'}',
-    if (minutes > 0) '$minutes minute${minutes == 1 ? '' : 's'}',
-  ];
-
-  switch (parts.length) {
-    case 0:
-      return 'in less than a minute';
-    case 1:
-      return 'in ${parts[0]}';
-    case 2:
-      return 'in ${parts[0]} and ${parts[1]}';
-    default:
-      return 'in ${parts[0]}, ${parts[1]}, and ${parts[2]}';
-  }
-}
 
 class NoteEditorScreen extends ConsumerStatefulWidget {
   final Note? existing;
@@ -79,7 +48,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   late String _noteId;
   DateTime? _reminderAt;
   bool _reminderResolved = false;
-  RepeatInterval _repeatInterval = RepeatInterval.none;
+  RepeatRule? _repeatRule;
+  int _repeatOccurrenceNumber = 1;
   bool _dirty = false;
   bool _saving = false;
 
@@ -106,7 +76,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     _colorIndex = n?.colorIndex ?? 0;
     _reminderAt = n?.reminderAt;
     _reminderResolved = n?.reminderResolved ?? false;
-    _repeatInterval = n?.repeatInterval ?? RepeatInterval.none;
+    _repeatRule = n?.repeatRule;
+    _repeatOccurrenceNumber = n?.repeatOccurrenceNumber ?? 1;
     _lastKnownUpdated = n?.updated;
     // Generated once per editing session so repeated saves (e.g. multiple
     // back-button presses before the first save/pop completes) update the
@@ -118,8 +89,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         widget.initialBody!.isNotEmpty) {
       // A shared-in note counts as "content to save" the moment it lands,
       // unlike a genuinely blank new note - and, same reasoning as
-      // _pickReminder/_clearReminder's own immediate saves, this can't
-      // wait for PopScope's save-on-pop: leaving via the home button/app
+      // _openReminderEditor/_clearReminder's own immediate saves, this
+      // can't wait for PopScope's save-on-pop: leaving via the home button/app
       // switcher/OS process kill never triggers it, which would otherwise
       // silently discard a share the user never even got a chance to
       // reject.
@@ -148,7 +119,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       created: existing?.created ?? now,
       updated: now,
       reminderResolved: _reminderResolved,
-      repeatInterval: _repeatInterval,
+      repeatRule: _repeatRule,
+      repeatOccurrenceNumber: _repeatOccurrenceNumber,
     );
   }
 
@@ -208,88 +180,71 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       _colorIndex = remote.colorIndex;
       _reminderAt = remote.reminderAt;
       _reminderResolved = remote.reminderResolved;
-      _repeatInterval = remote.repeatInterval;
+      _repeatRule = remote.repeatRule;
+      _repeatOccurrenceNumber = remote.repeatOccurrenceNumber;
       _lastKnownUpdated = remote.updated;
     });
     _bodyEditorKey.currentState?.applyExternalBody(remote.body);
   }
 
-  Future<void> _pickReminder() async {
-    final now = DateTime.now();
-    // An expired reminder can't be used as showDatePicker's initialDate -
-    // it violates the picker's own firstDate: now constraint (initialDate
-    // must be on or after firstDate), which would crash rather than let
-    // you reset it. Fall back to the same "an hour from now" default used
-    // when there's no reminder at all yet.
-    final initial = (_reminderAt != null && _reminderAt!.isAfter(now))
-        ? _reminderAt!
-        : now.add(const Duration(hours: 1));
-    final ctx = context;
-    final date = await showDatePicker(
-      context: ctx,
-      initialDate: initial,
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 365 * 5)),
+  /// Opens ReminderEditScreen (date/time/repeat all together, modeled on
+  /// Google Calendar's own event screen - see its own doc comment) whether
+  /// this note already has a reminder or not; that screen itself covers
+  /// both setting/editing and removing one, so there's no separate "which
+  /// mode" branch here the way the old picker chain needed.
+  Future<void> _openReminderEditor() async {
+    final result = await Navigator.push<ReminderEditResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReminderEditScreen(
+          initialReminderAt: _reminderAt,
+          initialRepeatRule: _repeatRule,
+        ),
+      ),
     );
-    if (date == null || !mounted) return;
+    if (result == null || !mounted) return;
 
-    final time = await showTimePicker(
-      // ignore: use_build_context_synchronously
-      context: ctx,
-      initialTime: TimeOfDay.fromDateTime(initial),
-    );
-    if (time == null || !mounted) return;
-
-    final reminderAt = DateTime(
-      date.year,
-      date.month,
-      date.day,
-      time.hour,
-      time.minute,
-    );
-
-    // Offered as part of setting/editing the reminder itself, not only
-    // afterward via the reminder chip's separate "Repeat" option - that
-    // was an easy-to-miss extra step for something that reads as part of
-    // "setting a reminder" in the first place. Dismissing this sheet
-    // (null) leaves whatever repeat setting was already there (none, for
-    // a brand-new reminder) rather than cancelling the reminder itself.
-    final repeatInterval = await _selectRepeatInterval();
-    if (!mounted) return;
-
-    setState(() {
-      _reminderAt = reminderAt;
-      // A fresh reminder cycle - see Note.reminderResolved's own doc
-      // comment for why whoever sets a new reminderAt is responsible for
-      // also clearing this, rather than something downstream inferring it.
-      _reminderResolved = false;
-      if (repeatInterval != null) _repeatInterval = repeatInterval;
-      _dirty = true;
-    });
-
-    // Persist (and thus actually schedule the notification) right now,
-    // rather than deferring to the pop-triggered autosave: leaving the
-    // screen via the home button/app switcher/OS process kill never
-    // triggers PopScope, so a reminder set here would otherwise silently
-    // never be saved or scheduled at all, despite the confirmation message
-    // below implying it was.
-    final scheduleError = await _save();
-    if (!mounted) return;
-
-    await _showReminderFeedback(reminderAt, scheduleError);
+    switch (result) {
+      case ReminderSet(:final reminderAt, :final repeatRule):
+        setState(() {
+          _reminderAt = reminderAt;
+          // A fresh reminder cycle - see Note.reminderResolved's own doc
+          // comment for why whoever sets a new reminderAt is responsible
+          // for also clearing this, rather than something downstream
+          // inferring it. Same reasoning for starting back at occurrence
+          // 1 - the user just explicitly (re)configured this reminder
+          // from scratch, so whatever occurrence count an old rule had
+          // reached is no longer meaningful.
+          _reminderResolved = false;
+          _repeatRule = repeatRule;
+          _repeatOccurrenceNumber = 1;
+          _dirty = true;
+        });
+        // Persist (and thus actually schedule the notification) right
+        // now, rather than deferring to the pop-triggered autosave:
+        // leaving the screen via the home button/app switcher/OS process
+        // kill never triggers PopScope, so a reminder set here would
+        // otherwise silently never be saved or scheduled at all.
+        final scheduleError = await _save();
+        if (!mounted) return;
+        await _showReminderSchedulingWarnings(scheduleError);
+      case ReminderRemoved():
+        await _clearReminder();
+    }
   }
 
-  /// Shows exactly one message after a reminder is set: the real error
-  /// from the scheduling attempt itself if there was one (this is the
-  /// actual outcome, not a guess - previously a permission check could
-  /// claim success while the real zonedSchedule() call silently failed
-  /// for an unrelated reason), else whichever permission problem would
-  /// stop it from firing even though scheduling itself didn't throw, else
-  /// a plain confirmation of the time it was set for.
-  Future<void> _showReminderFeedback(
-    DateTime reminderAt,
-    String? scheduleError,
-  ) async {
+  /// Surfaces only genuine problems after a reminder is saved - the real
+  /// error from the scheduling attempt itself if there was one (this is
+  /// the actual outcome, not a guess - a permission check alone could
+  /// claim success while the real zonedSchedule() call silently failed for
+  /// an unrelated reason), else whichever permission problem would stop it
+  /// from firing even though scheduling itself didn't throw. Deliberately
+  /// has no "success" case of its own - ReminderEditScreen already showed
+  /// exactly what was being saved before the checkmark was tapped, so a
+  /// further "Reminder set" confirmation here would just be redundant
+  /// friction on top of that, unlike the old picker-chain flow that had no
+  /// other point where the chosen time was ever shown back for review.
+  Future<void> _showReminderSchedulingWarnings(String? scheduleError) async {
     if (scheduleError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -343,35 +298,12 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
           duration: const Duration(seconds: 6),
         ),
       );
-      return;
     }
-
-    // A modal dialog requiring an explicit OK, not a SnackBar - the time
-    // shown here is easy to misread in the split second before a toast
-    // auto-dismisses, and unlike the two warning cases above (which have
-    // their own "Fix" action forcing a deliberate read), a plain success
-    // message was too easy to miss entirely.
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Reminder set'),
-        content: Text(
-          '${DateFormat('MMM d, h:mm a').format(reminderAt)} '
-          '(${formatTimeUntilReminder(reminderAt)})',
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
   }
 
   /// Clears the reminder and saves immediately - same reasoning as
-  /// _pickReminder's own immediate save: leaving the screen via the home
-  /// button/app switcher/OS process kill never triggers PopScope, so a
+  /// _openReminderEditor's own immediate save: leaving the screen via the
+  /// home button/app switcher/OS process kill never triggers PopScope, so a
   /// removed reminder would otherwise silently keep firing (its tray
   /// notification never actually cancelled - see NotesNotifier.addOrUpdate,
   /// which cancels the old alarm on every save) until the note happened to
@@ -380,107 +312,10 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     setState(() {
       _reminderAt = null;
       _reminderResolved = false;
-      // Meaningless with no reminderAt to advance - see RepeatInterval's own
-      // doc comment.
-      _repeatInterval = RepeatInterval.none;
-      _dirty = true;
-    });
-    await _save();
-  }
-
-  /// Tapping the reminder chip used to remove it outright with no way to
-  /// reconsider or edit it instead - this presents both choices explicitly,
-  /// wording the first option around whichever is actually true (a past
-  /// reminder can only be reset to a new time, not "edited" as if it were
-  /// still pending). This is this note's own reminder settings, distinct
-  /// from Snooze/Dismiss on an actually-fired reminder's notification
-  /// itself (see NotificationService's notification action handling) -
-  /// deliberately not reusing that wording here to avoid conflating the two.
-  Future<void> _showReminderOptions() async {
-    final reminderAt = _reminderAt;
-    if (reminderAt == null) return;
-    final isExpired = !reminderAt.isAfter(DateTime.now());
-
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: Text(isExpired ? 'Reset reminder' : 'Edit reminder'),
-              onTap: () => Navigator.pop(sheetContext, 'edit'),
-            ),
-            ListTile(
-              key: const Key('reminder_options_repeat'),
-              leading: const Icon(Icons.repeat),
-              title: const Text('Repeat'),
-              subtitle: Text(_repeatInterval.label),
-              onTap: () => Navigator.pop(sheetContext, 'repeat'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.alarm_off_outlined),
-              title: const Text('Remove reminder'),
-              onTap: () => Navigator.pop(sheetContext, 'remove'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (!mounted) return;
-    switch (action) {
-      case 'edit':
-        await _pickReminder();
-      case 'remove':
-        await _clearReminder();
-      case 'repeat':
-        await _pickRepeatInterval();
-    }
-  }
-
-  /// Bottom sheet of [RepeatInterval] presets - shared by [_pickReminder]
-  /// (offered as part of setting/editing a reminder's time, not just
-  /// afterward - see its own call site) and [_pickRepeatInterval] (reached
-  /// later via the reminder chip's own standalone "Repeat" option, for
-  /// changing just the repeat setting without reopening the date/time
-  /// pickers). Returns null if dismissed without choosing. Plain
-  /// checkmarked ListTiles rather than RadioListTile, whose
-  /// groupValue/onChanged are deprecated as of Flutter 3.32 in favor of a
-  /// RadioGroup ancestor this codebase has no other use for yet.
-  Future<RepeatInterval?> _selectRepeatInterval() {
-    return showModalBottomSheet<RepeatInterval>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final interval in RepeatInterval.values)
-              ListTile(
-                key: Key('repeat_option_${interval.name}'),
-                title: Text(interval.label),
-                trailing: interval == _repeatInterval
-                    ? const Icon(Icons.check)
-                    : null,
-                onTap: () => Navigator.pop(sheetContext, interval),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Reached via the reminder chip's standalone "Repeat" option - only
-  /// meaningful together with an active [_reminderAt] (see RepeatInterval's
-  /// own doc comment), so this is only ever reachable from there. Saves
-  /// immediately, same reasoning as _pickReminder/_clearReminder's own
-  /// immediate saves.
-  Future<void> _pickRepeatInterval() async {
-    final selected = await _selectRepeatInterval();
-    if (selected == null || !mounted) return;
-    setState(() {
-      _repeatInterval = selected;
+      // Meaningless with no reminderAt to advance - see Note.repeatRule's
+      // own doc comment.
+      _repeatRule = null;
+      _repeatOccurrenceNumber = 1;
       _dirty = true;
     });
     await _save();
@@ -686,9 +521,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
             _ReminderPillButton(
               reminderAt: _reminderAt,
               iconColor: textColor,
-              onPressed: _reminderAt == null
-                  ? _pickReminder
-                  : _showReminderOptions,
+              onPressed: _openReminderEditor,
             ),
             const SizedBox(width: 8),
           ],
