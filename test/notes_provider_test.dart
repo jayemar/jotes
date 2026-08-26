@@ -270,5 +270,49 @@ void main() {
 
       expect(error, isNull);
     });
+
+    test(
+      'invalidating the provider from outside the notifier - exactly what '
+      'SyncNotifier._handleRemoteEvent does for an incoming realtime '
+      'server push, which writes straight to local storage and never '
+      'goes through addOrUpdate at all - still eagerly pushes fresh data '
+      'to home-screen widgets, the same as a local addOrUpdate does',
+      () async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        final syncedCalls = <List<Note>>[];
+        WidgetService.instance.debugSyncAll = (notes) async {
+          syncedCalls.add(notes);
+        };
+        addTearDown(() => WidgetService.instance.debugSyncAll = (_) async {});
+
+        // An active listener, the same as NotesScreen's own
+        // ref.watch(notesProvider) - without one, invalidate() only marks
+        // the provider dirty rather than eagerly rebuilding it, and this
+        // test would need to explicitly re-read the future itself to
+        // force a rebuild, which would prove nothing about the real
+        // production path.
+        final sub = container.listen(notesProvider, (_, _) {});
+        addTearDown(sub.close);
+        await container.read(notesProvider.future);
+        syncedCalls.clear();
+
+        final remoteNote = _newNote(
+          id: 'from-server',
+          title: 'Pushed from server',
+        );
+        await DbService.instance.upsert(remoteNote);
+        container.invalidate(notesProvider);
+        // Lets the invalidated provider's eager rebuild (and the
+        // fire-and-forget WidgetService.syncAll it kicks off) actually
+        // run, without explicitly re-reading notesProvider.future
+        // ourselves - see the comment on the listener above.
+        await pumpEventQueue();
+
+        expect(syncedCalls, isNotEmpty);
+        expect(syncedCalls.last.map((n) => n.id), contains('from-server'));
+      },
+    );
   });
 }

@@ -2,7 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/note.dart';
 import 'note_body_editor.dart'
-    show ChecklistBodyBlock, TextBodyBlock, checklistIndentStepPx, parseBody;
+    show
+        BulletBodyBlock,
+        ChecklistBodyBlock,
+        NumberedBodyBlock,
+        TextBodyBlock,
+        checklistIndentStepPx,
+        parseBody;
 import 'note_link_spans.dart';
 
 class NoteCard extends StatelessWidget {
@@ -149,6 +155,30 @@ class _NoteBodyPreview extends StatelessWidget {
             ),
           );
           linesUsed += 1;
+        case BulletBodyBlock():
+          children.add(
+            _ListMarkerPreviewRow(
+              marker: '•',
+              text: block.text,
+              indent: block.indent,
+              textColor: textColor,
+              linkColor: linkColor,
+              linksTappable: linksTappable,
+            ),
+          );
+          linesUsed += 1;
+        case NumberedBodyBlock():
+          children.add(
+            _ListMarkerPreviewRow(
+              marker: '${block.number}.',
+              text: block.text,
+              indent: block.indent,
+              textColor: textColor,
+              linkColor: linkColor,
+              linksTappable: linksTappable,
+            ),
+          );
+          linesUsed += 1;
         case TextBodyBlock():
           final remaining = _maxPreviewLines - linesUsed;
           final baseStyle = TextStyle(
@@ -233,6 +263,69 @@ class _ChecklistPreviewRow extends StatelessWidget {
                         onTapLink: (url) => openLink(context, url),
                       )
                     : [TextSpan(text: block.text, style: baseStyle)],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Read-only preview row for a [BulletBodyBlock]/[NumberedBodyBlock] - a
+/// plain [marker] ("•" or "N.") followed by the item's text, the same
+/// layout shape as [_ChecklistPreviewRow] but with a text marker instead
+/// of a checkbox icon and no strikethrough (plain list items don't have a
+/// checked state).
+class _ListMarkerPreviewRow extends StatelessWidget {
+  final String marker;
+  final String text;
+  final int indent;
+  final Color textColor;
+  final Color linkColor;
+  final bool linksTappable;
+
+  const _ListMarkerPreviewRow({
+    required this.marker,
+    required this.text,
+    required this.indent,
+    required this.textColor,
+    required this.linkColor,
+    required this.linksTappable,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = TextStyle(fontSize: 13, color: textColor.withAlpha(220));
+    return Padding(
+      padding: EdgeInsets.only(left: indent * checklistIndentStepPx, top: 1, bottom: 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // minWidth only, no maxWidth - see note_body_view.dart's own
+          // _buildListMarkerBlock for why a numbered marker (unbounded
+          // digit count) must never be squeezed into a fixed width.
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 14),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(marker, style: baseStyle),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: linksTappable
+                    ? buildLinkSpans(
+                        text: text,
+                        baseStyle: baseStyle,
+                        linkColor: linkColor,
+                        onTapLink: (url) => openLink(context, url),
+                      )
+                    : [TextSpan(text: text, style: baseStyle)],
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

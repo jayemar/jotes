@@ -346,10 +346,11 @@ TextEditingValue? applyEnterOnChecklistLine({
 const maxChecklistIndent = 1;
 const checklistIndentStepPx = 20.0;
 
-/// A block of a note body: either a run of plain text (possibly spanning
-/// several `\n`-joined lines) or a single checklist item. Notes can mix
-/// both freely, unlike Google Keep, where a note is entirely a checklist
-/// or entirely plain text.
+/// A block of a note body: a run of plain text (possibly spanning several
+/// `\n`-joined lines), a single checklist item, or a single plain
+/// (bullet/numbered) list item. Notes can mix all of these freely, unlike
+/// Google Keep, where a note is entirely a checklist or entirely plain
+/// text.
 sealed class BodyBlock {}
 
 class TextBodyBlock extends BodyBlock {
@@ -366,6 +367,27 @@ class ChecklistBodyBlock extends BodyBlock {
     required this.text,
     this.indent = 0,
   });
+}
+
+/// A plain (non-checklist) unordered list item - "- text" or "* text" (see
+/// _bulletLinePattern). Indent follows the same top-level/sub-item
+/// convention as [ChecklistBodyBlock].
+class BulletBodyBlock extends BodyBlock {
+  final String text;
+  final int indent;
+  BulletBodyBlock({required this.text, this.indent = 0});
+}
+
+/// An ordered list item - "N. text" (see _numberedLinePattern). [number]
+/// is whatever literal number the line was written with; unlike some
+/// Markdown renderers, this doesn't renumber a run of items sequentially -
+/// it displays exactly what's in the source, same as [ChecklistBodyBlock]
+/// displays exactly whatever checked state is in the source.
+class NumberedBodyBlock extends BodyBlock {
+  final int number;
+  final String text;
+  final int indent;
+  NumberedBodyBlock({required this.number, required this.text, this.indent = 0});
 }
 
 /// One block from [parseBodyWithOffsets], carrying its position in the
@@ -392,11 +414,14 @@ class ParsedBlock {
 /// Parses a stored [Note.body] string into blocks. A line matching
 /// `- [ ] text` / `- [x] text` (optionally indented - see
 /// matchChecklistLine/_leadingSpacesPattern) becomes its own
-/// [ChecklistBodyBlock]; runs of non-matching lines are merged into a
-/// single [TextBodyBlock]. This is the same Markdown task-list convention
-/// KeepImportService writes for imported Keep checklists (always
-/// unindented), so previously-imported checklists become interactive here
-/// for free.
+/// [ChecklistBodyBlock]; a plain `- text` / `* text` becomes a
+/// [BulletBodyBlock] and `N. text` a [NumberedBodyBlock] (checked first
+/// against the checklist pattern, so `- [ ] text` is never misread as a
+/// bullet whose text happens to start with "[ ]"); runs of non-matching
+/// lines are merged into a single [TextBodyBlock]. This is the same
+/// Markdown task-list convention KeepImportService writes for imported
+/// Keep checklists (always unindented), so previously-imported checklists
+/// become interactive here for free.
 List<ParsedBlock> parseBodyWithOffsets(String body) {
   final result = <ParsedBlock>[];
   final textLines = <String>[];
@@ -424,13 +449,14 @@ List<ParsedBlock> parseBodyWithOffsets(String body) {
     final lineAfterIndent = line.substring(leadingSpaces.length);
     final checklistMatch = matchChecklistLine(lineAfterIndent);
     final lineEnd = offset + line.length;
+    // Integer division rather than requiring an exact multiple of 2 -
+    // defensive against hand-edited/irregularly-indented markdown (e.g. a
+    // stray odd space) rather than crashing or misparsing entirely. Shared
+    // by all three list-marker block types below.
+    final indent = (leadingSpaces.length ~/ 2).clamp(0, maxChecklistIndent);
 
     if (checklistMatch != null) {
       flushText();
-      // Integer division rather than requiring an exact multiple of 2 -
-      // defensive against hand-edited/irregularly-indented markdown (e.g.
-      // a stray odd space) rather than crashing or misparsing entirely.
-      final indent = (leadingSpaces.length ~/ 2).clamp(0, maxChecklistIndent);
       result.add(
         ParsedBlock(
           block: ChecklistBodyBlock(
@@ -444,11 +470,51 @@ List<ParsedBlock> parseBodyWithOffsets(String body) {
               offset + leadingSpaces.length + checklistMatch.rawPrefixLength,
         ),
       );
-    } else {
-      if (textLines.isEmpty) textStart = offset;
-      textLines.add(line);
-      textEnd = lineEnd;
+      offset = lineEnd + 1;
+      continue;
     }
+
+    final bulletMatch = _bulletLinePattern.firstMatch(lineAfterIndent);
+    if (bulletMatch != null) {
+      flushText();
+      final text = bulletMatch.group(2) ?? '';
+      final rawPrefixLength = lineAfterIndent.length - text.length;
+      result.add(
+        ParsedBlock(
+          block: BulletBodyBlock(text: text, indent: indent),
+          start: offset,
+          end: lineEnd,
+          textStart: offset + leadingSpaces.length + rawPrefixLength,
+        ),
+      );
+      offset = lineEnd + 1;
+      continue;
+    }
+
+    final numberedMatch = _numberedLinePattern.firstMatch(lineAfterIndent);
+    if (numberedMatch != null) {
+      flushText();
+      final text = numberedMatch.group(2) ?? '';
+      final rawPrefixLength = lineAfterIndent.length - text.length;
+      result.add(
+        ParsedBlock(
+          block: NumberedBodyBlock(
+            number: int.parse(numberedMatch.group(1)!),
+            text: text,
+            indent: indent,
+          ),
+          start: offset,
+          end: lineEnd,
+          textStart: offset + leadingSpaces.length + rawPrefixLength,
+        ),
+      );
+      offset = lineEnd + 1;
+      continue;
+    }
+
+    if (textLines.isEmpty) textStart = offset;
+    textLines.add(line);
+    textEnd = lineEnd;
 
     // +1 accounts for the '\n' separator consumed between lines; this
     // overcounts past body.length after the very last line, but offset
@@ -469,11 +535,13 @@ List<BodyBlock> parseBody(String body) =>
 String serializeBody(List<BodyBlock> blocks) {
   return blocks
       .map((b) {
-        if (b is ChecklistBodyBlock) {
-          final indentSpaces = '  ' * b.indent;
-          return '$indentSpaces- [${b.checked ? 'x' : ' '}] ${b.text}';
-        }
-        return (b as TextBodyBlock).text;
+        return switch (b) {
+          ChecklistBodyBlock() =>
+            '${'  ' * b.indent}- [${b.checked ? 'x' : ' '}] ${b.text}',
+          BulletBodyBlock() => '${'  ' * b.indent}- ${b.text}',
+          NumberedBodyBlock() => '${'  ' * b.indent}${b.number}. ${b.text}',
+          TextBodyBlock() => b.text,
+        };
       })
       .join('\n');
 }

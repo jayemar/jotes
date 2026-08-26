@@ -4,7 +4,9 @@ import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'note_body_editor.dart'
     show
         BodyBlock,
+        BulletBodyBlock,
         ChecklistBodyBlock,
+        NumberedBodyBlock,
         ParsedBlock,
         TextBodyBlock,
         checklistIndentStepPx,
@@ -160,9 +162,28 @@ class NoteBodyView extends StatelessWidget {
         itemCount: segments.length,
         itemBuilder: (context, segIndex) {
           final segment = segments[segIndex];
-          return segment.isChecklistRun
-              ? _buildChecklistRun(context, viewBlocks, segment)
-              : _buildTextBlock(context, viewBlocks[segment.start]);
+          if (segment.isChecklistRun) {
+            return _buildChecklistRun(context, viewBlocks, segment);
+          }
+          final viewBlock = viewBlocks[segment.start];
+          return switch (viewBlock.block) {
+            BulletBodyBlock(:final text, :final indent) => _buildListMarkerBlock(
+              context,
+              viewBlock,
+              marker: '•',
+              text: text,
+              indent: indent,
+            ),
+            NumberedBodyBlock(:final number, :final text, :final indent) =>
+              _buildListMarkerBlock(
+                context,
+                viewBlock,
+                marker: '$number.',
+                text: text,
+                indent: indent,
+              ),
+            _ => _buildTextBlock(context, viewBlock),
+          };
         },
       ),
     );
@@ -195,6 +216,73 @@ class NoteBodyView extends StatelessWidget {
                   ),
                 ),
               ),
+      ),
+    );
+  }
+
+  /// Read-only row for a [BulletBodyBlock]/[NumberedBodyBlock] - a plain
+  /// [marker] ("•" or "N.") followed by the item's text, tap-to-edit only
+  /// (no checkbox/drag handle - those are checklist-specific, see
+  /// _buildChecklistRun/_ChecklistViewRow).
+  Widget _buildListMarkerBlock(
+    BuildContext context,
+    ViewBlock viewBlock, {
+    required String marker,
+    required String text,
+    required int indent,
+  }) {
+    final parsed = viewBlock.parsed;
+    final textKey = GlobalKey();
+    return Padding(
+      padding: EdgeInsets.only(
+        left: indent * checklistIndentStepPx,
+        top: 2,
+        bottom: 2,
+      ),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapUp: (details) => _tapToOffset(
+          textKey: textKey,
+          globalPosition: details.globalPosition,
+          textStart: parsed.textStart,
+          onOffset: onEnterEditAt,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // minWidth only, no maxWidth - a bullet ("•") is narrow enough
+            // to need padding out to a consistent minimum, but a numbered
+            // marker has no upper bound on digit count ("10.", "100.", ...)
+            // and must never be squeezed into a fixed width, which would
+            // wrap it onto multiple lines instead of clipping.
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 18),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  marker,
+                  style: TextStyle(fontSize: 15, color: textColor),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: text.isEmpty
+                  ? const SizedBox(height: 20, width: double.infinity)
+                  : Text.rich(
+                      key: textKey,
+                      TextSpan(
+                        children: buildLinkSpans(
+                          text: text,
+                          baseStyle: TextStyle(fontSize: 15, color: textColor),
+                          linkColor: linkColor,
+                          onTapLink: (url) => openLink(context, url),
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -112,6 +112,60 @@ void main() {
     expect(find.byIcon(Icons.check_box), findsOneWidget);
   });
 
+  testWidgets('a plain bullet list renders a "•" marker per item, not the '
+      'raw "- "/"* " markdown syntax', (tester) async {
+    await _pump(tester, _note(body: '- Bread\n* Eggs'));
+
+    expect(find.text('•'), findsNWidgets(2));
+    expect(find.text('Bread'), findsOneWidget);
+    expect(find.text('Eggs'), findsOneWidget);
+    expect(find.textContaining('- Bread'), findsNothing);
+  });
+
+  testWidgets('a numbered list renders the literal "N." marker per item, '
+      'not the raw markdown syntax', (tester) async {
+    await _pump(tester, _note(body: '1. Preheat\n2. Bake'));
+
+    expect(find.text('1.'), findsOneWidget);
+    expect(find.text('2.'), findsOneWidget);
+    expect(find.text('Preheat'), findsOneWidget);
+    expect(find.text('Bake'), findsOneWidget);
+  });
+
+  testWidgets('a double-digit numbered marker ("10.") renders on a single '
+      'line, not wrapped across several - regression test for a '
+      'fixed-width marker column that only had room for a bullet/single '
+      'digit', (tester) async {
+    // A single line, not a 10-item list - _NoteBodyPreview caps at 8
+    // lines, so a longer list would never actually reach "10.".
+    await _pump(tester, _note(body: '10. Item ten\n1. Item one'));
+
+    expect(find.text('10.'), findsOneWidget);
+    expect(
+      tester.getSize(find.text('10.')).height,
+      tester.getSize(find.text('1.')).height,
+    );
+  });
+
+  testWidgets('mixed plain text, checklist, bullet, and numbered blocks '
+      'all render together in the same card', (tester) async {
+    await _pump(
+      tester,
+      _note(
+        body:
+            'Notes\n- [ ] Checklist item\n- Bullet item\n1. Numbered item',
+      ),
+    );
+
+    expect(find.text('Notes'), findsOneWidget);
+    expect(find.byIcon(Icons.check_box_outline_blank), findsOneWidget);
+    expect(find.text('Checklist item'), findsOneWidget);
+    expect(find.text('•'), findsOneWidget);
+    expect(find.text('Bullet item'), findsOneWidget);
+    expect(find.text('1.'), findsOneWidget);
+    expect(find.text('Numbered item'), findsOneWidget);
+  });
+
   testWidgets('plain text notes with no checklist syntax render as before', (
     tester,
   ) async {

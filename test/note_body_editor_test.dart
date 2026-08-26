@@ -118,6 +118,105 @@ void main() {
     });
   });
 
+  group('parseBody / serializeBody - bullet lists', () {
+    test('"- text" and "* text" lines each parse as their own '
+        'BulletBodyBlock, round-tripping with their own original marker',
+        () {
+      const body = '- dash bullet\n* star bullet';
+      final blocks = parseBody(body);
+
+      expect(blocks, hasLength(2));
+      expect(blocks.whereType<BulletBodyBlock>(), hasLength(2));
+      expect((blocks[0] as BulletBodyBlock).text, 'dash bullet');
+      expect((blocks[1] as BulletBodyBlock).text, 'star bullet');
+      // serializeBody always writes "-" regardless of the original marker -
+      // same "doesn't remember which literal spelling was used" trade-off
+      // as everything else here (e.g. checklist doesn't remember 2 vs 4
+      // spaces of indent, just how many *levels*).
+      expect(serializeBody(blocks), '- dash bullet\n- star bullet');
+    });
+
+    test('mixes plain text, checklist items, and plain bullets in the same '
+        'note', () {
+      const body = 'Groceries:\n- [x] Milk\n- Bread\n- Eggs';
+      final blocks = parseBody(body);
+
+      expect(blocks, hasLength(4));
+      expect(blocks[0], isA<TextBodyBlock>());
+      expect(blocks[1], isA<ChecklistBodyBlock>());
+      expect(blocks[2], isA<BulletBodyBlock>());
+      expect(blocks[3], isA<BulletBodyBlock>());
+      expect(serializeBody(blocks), body);
+    });
+
+    test('a bare "-"/"*" with no trailing space or text is still '
+        'recognized as a valid empty bullet, same as a bare checklist '
+        'marker', () {
+      final dash = parseBody('-').cast<BulletBodyBlock>();
+      expect(dash.single.text, '');
+
+      final star = parseBody('*').cast<BulletBodyBlock>();
+      expect(star.single.text, '');
+    });
+
+    test('2 leading spaces before a bullet line mark it as a sub-item, and '
+        'round-trip back to the same spacing', () {
+      const body = '- top-level\n  - a sub-item';
+      final blocks = parseBody(body).cast<BulletBodyBlock>();
+
+      expect(blocks.map((b) => b.indent), [0, 1]);
+      expect(serializeBody(blocks), body);
+    });
+  });
+
+  group('parseBody / serializeBody - numbered lists', () {
+    test('"N. text" lines each parse as their own NumberedBodyBlock, '
+        'preserving the exact written number rather than renumbering', () {
+      const body = '1. First\n1. Also written as 1\n3. Skipped to 3';
+      final blocks = parseBody(body).cast<NumberedBodyBlock>();
+
+      expect(blocks.map((b) => b.number), [1, 1, 3]);
+      expect(blocks.map((b) => b.text), ['First', 'Also written as 1', 'Skipped to 3']);
+      expect(serializeBody(blocks), body);
+    });
+
+    test('mixes plain text and numbered items in the same note', () {
+      const body = 'Steps:\n1. Preheat oven\n2. Mix batter\n\nDone.';
+      final blocks = parseBody(body);
+
+      expect(blocks, hasLength(4));
+      expect(blocks[0], isA<TextBodyBlock>());
+      expect(blocks[1], isA<NumberedBodyBlock>());
+      expect(blocks[2], isA<NumberedBodyBlock>());
+      expect(blocks[3], isA<TextBodyBlock>());
+      expect(serializeBody(blocks), body);
+    });
+
+    test('a bare "N." with no trailing space or text is still recognized '
+        'as a valid empty numbered item', () {
+      final blocks = parseBody('1.').cast<NumberedBodyBlock>();
+      expect(blocks.single.number, 1);
+      expect(blocks.single.text, '');
+    });
+
+    test('a decimal number that is not actually a list marker (nothing '
+        'after it but more digits, no space) is treated as plain text - '
+        'e.g. "3.14 is pi" should not be misread as a numbered item', () {
+      final blocks = parseBody('3.14 is pi');
+      expect(blocks, hasLength(1));
+      expect(blocks.single, isA<TextBodyBlock>());
+    });
+
+    test('2 leading spaces before a numbered line mark it as a sub-item, '
+        'and round-trip back to the same spacing', () {
+      const body = '1. top-level\n  1. a sub-item';
+      final blocks = parseBody(body).cast<NumberedBodyBlock>();
+
+      expect(blocks.map((b) => b.indent), [0, 1]);
+      expect(serializeBody(blocks), body);
+    });
+  });
+
   group('applyEnterOnChecklistLine', () {
     test('continues the list when Enter is pressed at the end of a '
         'checklist item with text', () {
@@ -585,6 +684,91 @@ void main() {
       expect(find.text('Done thing'), findsOneWidget);
       expect(find.text('Todo thing'), findsOneWidget);
     });
+
+    testWidgets(
+      'renders a bullet glyph ("•") for a plain "- "/"* " list item, not '
+      'the raw markdown syntax',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        await pumpEditor(
+          tester,
+          initialBody: 'Shopping:\n- Bread\n* Eggs',
+          key: key,
+        );
+
+        expect(find.text('•'), findsNWidgets(2));
+        expect(find.text('Shopping:'), findsOneWidget);
+        expect(find.text('Bread'), findsOneWidget);
+        expect(find.text('Eggs'), findsOneWidget);
+        // The raw markers themselves are never shown as part of the text.
+        expect(find.textContaining('- Bread'), findsNothing);
+        expect(find.textContaining('* Eggs'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'renders the literal number for a "N. " numbered list item, not '
+      'the raw markdown syntax',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        await pumpEditor(
+          tester,
+          initialBody: 'Steps:\n1. Preheat\n2. Bake',
+          key: key,
+        );
+
+        expect(find.text('1.'), findsOneWidget);
+        expect(find.text('2.'), findsOneWidget);
+        expect(find.text('Preheat'), findsOneWidget);
+        expect(find.text('Bake'), findsOneWidget);
+        expect(find.textContaining('1. Preheat'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'a double-digit numbered marker ("10.") renders on a single line, '
+      'not wrapped across several - regression test for a fixed-width '
+      'marker column that only had room for a bullet/single digit',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        await pumpEditor(
+          tester,
+          initialBody: List.generate(10, (i) => '${i + 1}. Item ${i + 1}')
+              .join('\n'),
+          key: key,
+        );
+
+        expect(find.text('10.'), findsOneWidget);
+        // A single-line "10." and a single-line "1." (same font size) have
+        // the same rendered height - if "10." had wrapped onto multiple
+        // lines instead, its height would be a multiple of that.
+        expect(
+          tester.getSize(find.text('10.')).height,
+          tester.getSize(find.text('1.')).height,
+        );
+      },
+    );
+
+    testWidgets(
+      'tapping a bullet/numbered item\'s text switches to edit mode with '
+      'the cursor at the tapped text offset, same as tapping a plain-text '
+      'paragraph',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        await pumpEditor(
+          tester,
+          initialBody: '- Bread',
+          key: key,
+        );
+
+        await tester.tap(find.text('Bread'));
+        await tester.pumpAndSettle();
+
+        expect(key.currentState!.isEditingBody, isTrue);
+        final field = tester.widget<TextField>(find.byType(TextField));
+        expect(field.controller!.text, '- Bread');
+      },
+    );
 
     testWidgets(
       'a note ending in a bare "- [ ]" (no trailing space or text) renders '

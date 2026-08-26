@@ -4,7 +4,13 @@ import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:home_widget/home_widget.dart';
 import '../models/note.dart';
 import '../widgets/note_body_editor.dart'
-    show BodyBlock, ChecklistBodyBlock, TextBodyBlock, parseBody;
+    show
+        BodyBlock,
+        BulletBodyBlock,
+        ChecklistBodyBlock,
+        NumberedBodyBlock,
+        TextBodyBlock,
+        parseBody;
 import '../widgets/note_links.dart';
 
 const _singleNoteReceiver = 'com.jayemar.jotes.SingleNoteWidgetReceiver';
@@ -146,6 +152,21 @@ class WidgetService {
       'checked': block.checked,
       ..._linkAwareText(block.text),
       'indent': block.indent,
+    },
+    // SingleNoteWidget.kt only knows "checklist"/"text" (see parseBlocks
+    // there) - a plain bullet/numbered item isn't worth a third native
+    // block type just for the home-screen widget, so its marker is folded
+    // back into the displayed text (raw "- "/"N. ", same as before this
+    // block type existed) rather than either crashing on an unrecognized
+    // type or silently dropping the line. This does mean a bulleted/
+    // numbered line that's otherwise nothing but a bare link loses the
+    // in-app "whole line is a link" styling in the widget specifically,
+    // since the marker prefix means _linkAwareText's isLink check no
+    // longer sees the *entire* text as just a link.
+    BulletBodyBlock() => {'type': 'text', ..._linkAwareText('- ${block.text}')},
+    NumberedBodyBlock() => {
+      'type': 'text',
+      ..._linkAwareText('${block.number}. ${block.text}'),
     },
     TextBodyBlock() => {'type': 'text', ..._linkAwareText(block.text)},
   };

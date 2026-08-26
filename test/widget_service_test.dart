@@ -248,6 +248,23 @@ void main() {
       ]);
     });
 
+    test('folds a plain bullet/numbered item back into a "text" block with '
+        'its raw marker, rather than crashing or silently dropping the '
+        'line - SingleNoteWidget.kt only knows "checklist"/"text" block '
+        'types (see the comment on _blockJson)', () {
+      final note = _note(
+        id: 'note-1',
+        body: '- Bread\n1. Preheat oven',
+      );
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {'type': 'text', 'text': '- Bread', 'isLink': false},
+        {'type': 'text', 'text': '1. Preheat oven', 'isLink': false},
+      ]);
+    });
+
     test('a text block that is entirely a link has its markdown syntax '
         'stripped to just the label, and isLink set - the widget can style '
         'the whole block as a link since Glance has no way to style just '
