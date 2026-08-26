@@ -814,6 +814,166 @@ void main() {
       expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue);
     });
 
+    group('checking an item sinks it to the bottom (see _toggleChecked)', () {
+      testWidgets(
+        'checking the top item moves it below the still-unchecked ones',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: '- [ ] first\n- [ ] second\n- [ ] third',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byType(Checkbox).at(0));
+          await tester.pumpAndSettle();
+
+          expect(latest, '- [ ] second\n- [ ] third\n- [x] first');
+        },
+      );
+
+      testWidgets(
+        'unchecking an already-checked item does not move it - it stays '
+        'wherever it currently is until manually reordered',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: '- [ ] first\n- [x] second\n- [ ] third',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          // "second" is the checked one - unchecking it.
+          await tester.tap(find.byType(Checkbox).at(1));
+          await tester.pumpAndSettle();
+
+          expect(latest, '- [ ] first\n- [ ] second\n- [ ] third');
+        },
+      );
+
+      testWidgets(
+        'checking an item already at the bottom of its run is a no-op '
+        'positionally - it was already there',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: '- [ ] first\n- [ ] second',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byType(Checkbox).at(1)); // "second"
+          await tester.pumpAndSettle();
+
+          expect(latest, '- [ ] first\n- [x] second');
+        },
+      );
+
+      testWidgets(
+        'checking an item never crosses into a separate checklist run - '
+        'it sinks to the bottom of its own run, not the very end of the '
+        'note',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody:
+                      '- [ ] first\n- [ ] second\n'
+                      'A paragraph in between.\n'
+                      '- [ ] third',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byType(Checkbox).at(0)); // "first"
+          await tester.pumpAndSettle();
+
+          expect(
+            latest,
+            '- [ ] second\n- [x] first\n'
+            'A paragraph in between.\n'
+            '- [ ] third',
+          );
+        },
+      );
+
+      testWidgets(
+        'checking a top-level item with a sub-item under it un-indents '
+        'the now-orphaned sub-item, same as deleting/dragging its parent '
+        'away already does',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: '- [ ] parent\n  - [ ] sub-item\n- [ ] other',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byType(Checkbox).at(0)); // "parent"
+          await tester.pumpAndSettle();
+
+          expect(
+            latest,
+            '- [ ] sub-item\n- [ ] other\n- [x] parent',
+          );
+        },
+      );
+    });
+
     testWidgets('the "Add checklist item" trigger appends a new empty item and '
         'switches to edit mode with the cursor right after it, since a '
         'brand-new item is empty and the user almost certainly wants to '
@@ -1764,22 +1924,27 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Three separate structural changes in a row.
-      await tester.tap(find.byType(Checkbox).at(0));
+      // Three separate structural changes in a row - each one always
+      // tapped at position 0, since checking an item sinks it to the
+      // bottom of the list (see NoteBodyEditorState._toggleChecked),
+      // moving whichever item is still unchecked back up to the front:
+      // checking "first" leaves "second" at the front, checking that
+      // leaves "third" at the front, ready to delete.
+      await tester.tap(find.byType(Checkbox).at(0)); // checks "first"
       await tester.pumpAndSettle();
-      await tester.tap(find.byType(Checkbox).at(1));
+      await tester.tap(find.byType(Checkbox).at(0)); // checks "second"
       await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.close).at(2));
+      await tester.tap(find.byIcon(Icons.close).at(0)); // deletes "third"
       await tester.pumpAndSettle();
       expect(latest, '- [x] first\n- [x] second');
 
       key.currentState!.undo();
       await tester.pumpAndSettle();
-      expect(latest, '- [x] first\n- [x] second\n- [ ] third');
+      expect(latest, '- [ ] third\n- [x] first\n- [x] second');
 
       key.currentState!.undo();
       await tester.pumpAndSettle();
-      expect(latest, '- [x] first\n- [ ] second\n- [ ] third');
+      expect(latest, '- [ ] second\n- [ ] third\n- [x] first');
 
       key.currentState!.undo();
       await tester.pumpAndSettle();

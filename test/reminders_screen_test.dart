@@ -38,8 +38,11 @@ Note _note({
 
 Future<ProviderContainer> _pumpRemindersScreen(
   WidgetTester tester,
-  List<Note> notes,
-) async {
+  List<Note> notes, {
+  // Simulates a device's bottom safe-area inset (e.g. an on-screen
+  // gesture/nav bar) - see the "bottom safe-area padding" test below.
+  double bottomInset = 0,
+}) async {
   final container = ProviderContainer(
     overrides: [notesProvider.overrideWith(() => _FakeNotesNotifier(notes))],
   );
@@ -47,7 +50,12 @@ Future<ProviderContainer> _pumpRemindersScreen(
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
-      child: const MaterialApp(home: RemindersScreen()),
+      child: MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(padding: EdgeInsets.only(bottom: bottomInset)),
+          child: const RemindersScreen(),
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -199,4 +207,27 @@ void main() {
     expect(onceTile.trailing, isNull);
     expect(find.byIcon(Icons.repeat), findsOneWidget);
   });
+
+  testWidgets(
+    'the list\'s trailing padding grows to include the device\'s bottom '
+    'safe-area inset, not just whatever default padding ListView.separated '
+    'applies on its own, so the last reminder is not left unreachable '
+    'behind an on-screen gesture/nav bar',
+    (tester) async {
+      await _pumpRemindersScreen(
+        tester,
+        [
+          _note(
+            id: 'a',
+            title: 'One',
+            reminderAt: DateTime.now().add(const Duration(hours: 1)),
+          ),
+        ],
+        bottomInset: 40,
+      );
+
+      final list = tester.widget<ListView>(find.byType(ListView));
+      expect((list.padding as EdgeInsets).bottom, 40);
+    },
+  );
 }

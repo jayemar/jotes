@@ -190,45 +190,21 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
         .toList();
   }
 
-  /// Bottom sheet of checkmarked options for an enum with a `label` field -
-  /// shared by _pickLayout/_pickSortOrder below, the same "checkmark
-  /// ListTiles in a bottom sheet" pattern reminder_edit_screen.dart's own
-  /// repeat picker uses. _pickReminderFilter below uses its own anchored
-  /// popup instead (see its own doc comment for why).
-  Future<T?> _selectOption<T>({
+  /// Popup anchored right next to whichever widget triggered it - shared
+  /// by the Filter/Layout/Sort pickers below, all reached from a small
+  /// icon (the search field's reminder-visibility button, or an item in
+  /// the overflow menu), where a bottom sheet rising from the bottom of
+  /// the screen felt disproportionate to a handful of options.
+  /// [anchorContext] should be the BuildContext of the specific tapped
+  /// widget, so the popup lands beside it rather than at some fixed
+  /// screen position.
+  Future<T?> _selectOptionAt<T>({
+    required BuildContext anchorContext,
     required List<T> options,
     required T current,
     required String Function(T) label,
     required String Function(T) keySuffix,
   }) {
-    return showModalBottomSheet<T>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final option in options)
-              ListTile(
-                key: Key('notes_view_option_${keySuffix(option)}'),
-                title: Text(label(option)),
-                trailing: option == current ? const Icon(Icons.check) : null,
-                onTap: () => Navigator.pop(sheetContext, option),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Unlike _selectOption's bottom sheet (used by layout/sort below), the
-  /// reminder filter opens as a popup anchored right next to the icon that
-  /// was tapped - it's reached far more often (right in the search field,
-  /// see reminder_visibility_button below) so a heavier bottom sheet for a
-  /// 3-option choice felt disproportionate. [anchorContext] should be the
-  /// BuildContext of the specific tapped widget, so the popup lands beside
-  /// it rather than at some fixed screen position.
-  Future<void> _pickReminderFilter(BuildContext anchorContext) async {
-    final current = ref.read(notesViewProvider).filter;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final button = anchorContext.findRenderObject() as RenderBox;
     final position = RelativeRect.fromRect(
@@ -241,30 +217,42 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
       ),
       Offset.zero & overlay.size,
     );
-    final selected = await showMenu<NoteReminderFilter>(
+    return showMenu<T>(
       context: context,
       position: position,
       items: [
-        for (final filter in NoteReminderFilter.values)
-          PopupMenuItem<NoteReminderFilter>(
-            key: Key('notes_view_option_${filter.name}'),
-            value: filter,
+        for (final option in options)
+          PopupMenuItem<T>(
+            key: Key('notes_view_option_${keySuffix(option)}'),
+            value: option,
             child: Row(
               children: [
-                Expanded(child: Text(filter.label)),
-                if (filter == current) const Icon(Icons.check, size: 18),
+                Expanded(child: Text(label(option))),
+                if (option == current) const Icon(Icons.check, size: 18),
               ],
             ),
           ),
       ],
     );
+  }
+
+  Future<void> _pickReminderFilter(BuildContext anchorContext) async {
+    final current = ref.read(notesViewProvider).filter;
+    final selected = await _selectOptionAt<NoteReminderFilter>(
+      anchorContext: anchorContext,
+      options: NoteReminderFilter.values,
+      current: current,
+      label: (f) => f.label,
+      keySuffix: (f) => f.name,
+    );
     if (selected == null) return;
     await ref.read(notesViewProvider.notifier).setFilter(selected);
   }
 
-  Future<void> _pickLayout() async {
+  Future<void> _pickLayout(BuildContext anchorContext) async {
     final current = ref.read(notesViewProvider).layout;
-    final selected = await _selectOption<NoteLayout>(
+    final selected = await _selectOptionAt<NoteLayout>(
+      anchorContext: anchorContext,
       options: NoteLayout.values,
       current: current,
       label: (l) => l.label,
@@ -274,9 +262,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     await ref.read(notesViewProvider.notifier).setLayout(selected);
   }
 
-  Future<void> _pickSortOrder() async {
+  Future<void> _pickSortOrder(BuildContext anchorContext) async {
     final current = ref.read(notesViewProvider).sortOrder;
-    final selected = await _selectOption<NoteSortOrder>(
+    final selected = await _selectOptionAt<NoteSortOrder>(
+      anchorContext: anchorContext,
       options: NoteSortOrder.values,
       current: current,
       label: (s) => s.label,
@@ -311,8 +300,11 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     if (mounted) setState(() => _pendingDeleteIds.remove(note.id));
   }
 
-  Future<void> _recolorSelected(List<Note> notes) async {
-    final index = await showColorPickerSheet(context);
+  Future<void> _recolorSelected(
+    BuildContext anchorContext,
+    List<Note> notes,
+  ) async {
+    final index = await showColorPickerSheet(anchorContext);
     if (index == null || !mounted) return;
     final notifier = ref.read(notesProvider.notifier);
     final selected = notes.where((n) => _selectedIds.contains(n.id)).toList();
@@ -415,6 +407,15 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
               surfaceTintColor: Colors.transparent,
               elevation: 1,
               shadowColor: colorScheme.shadow,
+              // AppBar's own defaults (56 leadingWidth, 16 titleSpacing on
+              // both sides of the title) leave a lot of dead space around
+              // the hamburger icon and the search field's rounded
+              // container - tightening both hands that width back to the
+              // search field itself, which is what actually benefits from
+              // it (see the Expanded TextField inside the title container
+              // below).
+              leadingWidth: 48,
+              titleSpacing: 4,
               leading: _selectionMode
                   ? IconButton(
                       icon: Icon(Icons.close, color: iconColor),
@@ -495,10 +496,13 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                     ),
               actions: _selectionMode
                   ? [
-                      IconButton(
-                        icon: Icon(Icons.palette_outlined, color: iconColor),
-                        tooltip: 'Change color',
-                        onPressed: () => _recolorSelected(notes),
+                      Builder(
+                        builder: (paletteContext) => IconButton(
+                          icon: Icon(Icons.palette_outlined, color: iconColor),
+                          tooltip: 'Change color',
+                          onPressed: () =>
+                              _recolorSelected(paletteContext, notes),
+                        ),
                       ),
                       IconButton(
                         icon: Icon(Icons.folder_zip_outlined, color: iconColor),
@@ -521,34 +525,34 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                             setState(() => _searchQuery = '');
                           },
                         ),
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: Tooltip(
-                          message: syncState.status == SyncStatus.connected
-                              ? 'Sync connected'
-                              : 'Sync not connected',
-                          child: InkWell(
-                            key: const Key('sync_indicator_button'),
-                            customBorder: const CircleBorder(),
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const SyncSettingsScreen(),
-                              ),
+                      Tooltip(
+                        message: syncState.status == SyncStatus.connected
+                            ? 'Sync connected'
+                            : 'Sync not connected',
+                        child: InkWell(
+                          key: const Key('sync_indicator_button'),
+                          customBorder: const CircleBorder(),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const SyncSettingsScreen(),
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Container(
-                                key: const Key('sync_indicator'),
-                                width: 10,
-                                height: 10,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color:
-                                      syncState.status == SyncStatus.connected
-                                      ? Colors.green
-                                      : Colors.red,
-                                ),
+                          ),
+                          child: Padding(
+                            // Was all(12) plus an extra 6px wrapper beyond
+                            // that - more dead space around a 10px dot than
+                            // this touch target needs, at the search
+                            // field's expense.
+                            padding: const EdgeInsets.all(8),
+                            child: Container(
+                              key: const Key('sync_indicator'),
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: syncState.status == SyncStatus.connected
+                                    ? Colors.green
+                                    : Colors.red,
                               ),
                             ),
                           ),
@@ -557,28 +561,27 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                       Builder(
                         builder: (menuButtonContext) => PopupMenuButton<String>(
                           key: const Key('notes_view_menu'),
+                          // Was the default EdgeInsets.all(8) - tightened
+                          // to match the sync indicator's own padding just
+                          // to its left (see sync_indicator_button above).
+                          padding: const EdgeInsets.all(6),
                           icon: Icon(Icons.more_vert, color: iconColor),
                           tooltip: 'View options',
                           onSelected: (value) {
                             switch (value) {
-                              case 'filter':
-                                _pickReminderFilter(menuButtonContext);
                               case 'layout':
-                                _pickLayout();
+                                _pickLayout(menuButtonContext);
                               case 'sort':
-                                _pickSortOrder();
+                                _pickSortOrder(menuButtonContext);
                             }
                           },
+                          // Filter isn't offered here - it's already one
+                          // tap away via the reminder-visibility icon right
+                          // in the search field (see
+                          // reminder_visibility_button above), so a second
+                          // entry point for the same choice would just be
+                          // redundant.
                           itemBuilder: (context) => [
-                            PopupMenuItem(
-                              value: 'filter',
-                              child: ListTile(
-                                leading: const Icon(Icons.filter_list_outlined),
-                                title: const Text('Filter'),
-                                subtitle: Text(viewState.filter.label),
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                            ),
                             PopupMenuItem(
                               value: 'layout',
                               child: ListTile(
@@ -952,9 +955,19 @@ class _NoteGrid extends StatelessWidget {
       ),
     );
 
+    // The Scaffold's body (this grid's own CustomScrollView, in
+    // notes_screen.dart's _buildScaffold) is never wrapped in a SafeArea -
+    // unlike the fixed toolbars/drawer elsewhere in this app, which already
+    // reserve room for an on-screen gesture/nav bar via their own SafeArea
+    // (see e.g. note_editor_screen.dart's bottom toolbar) - so without this,
+    // scrolling to the end of the list leaves its last row sitting flush
+    // against a flat 8px padding, unreachable behind the system nav bar on
+    // an edge-to-edge display.
+    final bottomInset = 8.0 + MediaQuery.paddingOf(context).bottom;
+
     return switch (layout) {
       NoteLayout.card => SliverPadding(
-        padding: const EdgeInsets.all(8),
+        padding: EdgeInsets.fromLTRB(8, 8, 8, bottomInset),
         sliver: SliverMasonryGrid(
           // Keyed on the ordered note ids: RenderSliverMasonryGrid caches
           // each child's column assignment (crossAxisIndex) on its own
@@ -989,7 +1002,7 @@ class _NoteGrid extends StatelessWidget {
       // NoteCard as the card layout, just not packed side by side into
       // columns.
       NoteLayout.list => SliverPadding(
-        padding: const EdgeInsets.all(8),
+        padding: EdgeInsets.fromLTRB(8, 8, 8, bottomInset),
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, i) => Padding(

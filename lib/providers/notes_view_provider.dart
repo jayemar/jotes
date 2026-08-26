@@ -92,7 +92,11 @@ class NotesViewNotifier extends Notifier<NotesViewState> {
       (s) => s.name == prefs.getString(_sortOrderPrefsKey),
       orElse: () => NoteSortOrder.updatedNewest,
     );
-    state = NotesViewState(filter: filter, layout: layout, sortOrder: sortOrder);
+    state = NotesViewState(
+      filter: filter,
+      layout: layout,
+      sortOrder: sortOrder,
+    );
   }
 
   Future<void> setFilter(NoteReminderFilter filter) async {
@@ -135,10 +139,14 @@ final notesViewProvider = NotifierProvider<NotesViewNotifier, NotesViewState>(
 /// without pumping the whole screen. Composes with (runs after) the
 /// separate free-text search filter in NotesScreen._filterNotes; sort
 /// always applies last, regardless of what's already been narrowed out.
-/// Ties within a sort (e.g. two notes with the same title) keep their
-/// relative order from [notes] - Dart's List.sort is not guaranteed stable,
-/// but DbService's own fetch order (updated desc) makes "newest edit wins
-/// a tie" the practically-observed behavior for every sort here except
+/// Pinned notes (see [Note.pinned]) always sort above unpinned ones,
+/// regardless of [NoteSortOrder] - the chosen sort order still applies
+/// *within* each of those two groups, so e.g. pinned notes are still
+/// title-sorted amongst themselves under [NoteSortOrder.titleAZ]. Ties
+/// within a sort (e.g. two notes with the same title) keep their relative
+/// order from [notes] - Dart's List.sort is not guaranteed stable, but
+/// DbService's own fetch order (updated desc) makes "newest edit wins a
+/// tie" the practically-observed behavior for every sort here except
 /// updatedNewest/updatedOldest themselves, where a tie is moot anyway.
 List<Note> applyNotesView(List<Note> notes, NotesViewState state) {
   final filtered = switch (state.filter) {
@@ -151,15 +159,18 @@ List<Note> applyNotesView(List<Note> notes, NotesViewState state) {
 
   final sorted = [...filtered];
   sorted.sort((a, b) {
+    if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
     return switch (state.sortOrder) {
       NoteSortOrder.updatedNewest => b.updated.compareTo(a.updated),
       NoteSortOrder.updatedOldest => a.updated.compareTo(b.updated),
       NoteSortOrder.createdNewest => b.created.compareTo(a.created),
       NoteSortOrder.createdOldest => a.created.compareTo(b.created),
-      NoteSortOrder.titleAZ =>
-        a.title.toLowerCase().compareTo(b.title.toLowerCase()),
-      NoteSortOrder.titleZA =>
-        b.title.toLowerCase().compareTo(a.title.toLowerCase()),
+      NoteSortOrder.titleAZ => a.title.toLowerCase().compareTo(
+        b.title.toLowerCase(),
+      ),
+      NoteSortOrder.titleZA => b.title.toLowerCase().compareTo(
+        a.title.toLowerCase(),
+      ),
     };
   });
   return sorted;

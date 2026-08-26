@@ -12,6 +12,7 @@ Note _note({
   DateTime? reminderAt,
   bool reminderResolved = false,
   RepeatRule? repeatRule,
+  bool pinned = false,
 }) {
   final now = DateTime.now();
   return Note(
@@ -24,6 +25,7 @@ Note _note({
     updated: now,
     reminderResolved: reminderResolved,
     repeatRule: repeatRule,
+    pinned: pinned,
   );
 }
 
@@ -351,5 +353,32 @@ void main() {
 
       expect(find.byIcon(Icons.repeat), findsNothing);
     });
+  });
+
+  group('pin indicator', () {
+    testWidgets('a pinned note shows a pin glyph in the top-right corner', (
+      tester,
+    ) async {
+      await _pump(tester, _note(pinned: true));
+
+      expect(find.byIcon(Icons.push_pin), findsOneWidget);
+    });
+
+    testWidgets('an unpinned note shows no pin glyph', (tester) async {
+      await _pump(tester, _note(pinned: false));
+
+      expect(find.byIcon(Icons.push_pin), findsNothing);
+    });
+
+    testWidgets(
+      'a pinned note in selection mode shows the selection indicator '
+      'instead - the two would occupy the same corner',
+      (tester) async {
+        await _pump(tester, _note(pinned: true), selectionMode: true);
+
+        expect(find.byIcon(Icons.push_pin), findsNothing);
+        expect(find.byIcon(Icons.radio_button_unchecked), findsOneWidget);
+      },
+    );
   });
 }

@@ -242,11 +242,11 @@ void main() {
       await tester.tap(find.byKey(const Key('reminder_edit_repeat')));
       await tester.pumpAndSettle();
 
-      // By key, not by label text - the row underneath the sheet already
+      // By key, not by label text - the row underneath the popup already
       // shows the current choice's label as its own subtitle (still in
-      // the tree, just visually obscured by the modal sheet on top of
-      // it), so e.g. find.text('Daily') would match both it and the
-      // sheet's own "Daily" option.
+      // the tree, just visually obscured by the popup on top of it), so
+      // e.g. find.text('Daily') would match both it and the popup's own
+      // "Daily" option.
       expect(find.byKey(const Key('repeat_option_none')), findsOneWidget);
       for (final frequency in RepeatFrequency.values) {
         expect(
@@ -261,7 +261,12 @@ void main() {
       expect(find.byKey(const Key('repeat_option_custom')), findsOneWidget);
       expect(
         tester
-            .widget<ListTile>(find.byKey(const Key('repeat_option_daily')))
+            .widget<ListTile>(
+              find.descendant(
+                of: find.byKey(const Key('repeat_option_daily')),
+                matching: find.byType(ListTile),
+              ),
+            )
             .trailing,
         isNotNull,
       );
@@ -271,6 +276,28 @@ void main() {
 
       expect(find.text('Monthly'), findsOneWidget);
     });
+
+    testWidgets(
+      'opens as a popup anchored near the Repeat row, not a bottom sheet '
+      'rising from the bottom of the screen',
+      (tester) async {
+        await _pumpAndOpen(
+          tester,
+          initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+        );
+        final rowBottom = tester
+            .getBottomLeft(find.byKey(const Key('reminder_edit_repeat')))
+            .dy;
+
+        await tester.tap(find.byKey(const Key('reminder_edit_repeat')));
+        await tester.pumpAndSettle();
+
+        final optionTop = tester
+            .getTopLeft(find.byKey(const Key('repeat_option_none')))
+            .dy;
+        expect(optionTop, lessThan(rowBottom + 150));
+      },
+    );
 
     testWidgets('selecting "Every weekday" updates the row to say so', (
       tester,
@@ -291,7 +318,11 @@ void main() {
     testWidgets('tapping "Custom recurrence..." navigates to the custom '
         'recurrence screen, and confirming it there updates the row with '
         'the rule\'s own summary text', (tester) async {
-      final reminderAt = DateTime(2026, 8, 25, 9);
+      // Relative to "now" (not a fixed calendar date) - a hardcoded future
+      // date eventually becomes "the past" as real time moves on, which
+      // would silently change ReminderEditScreen's own already-past-reminder
+      // fallback behavior (see initState) out from under this test.
+      final reminderAt = DateTime.now().add(const Duration(hours: 1));
       await _pumpAndOpen(tester, initialReminderAt: reminderAt);
 
       await tester.tap(find.byKey(const Key('reminder_edit_repeat')));
@@ -308,12 +339,13 @@ void main() {
 
       // Back on the Repeat row, showing the resulting rule's own summary -
       // CustomRecurrenceScreen defaults an initially-empty rule to weekly,
-      // interval 1, on the reminder's own weekday (2026-08-25 is a
-      // Tuesday), never-ending. That weekday selection (even though it's
-      // just the one day the reminder already falls on) makes weekdays
-      // non-empty, so isSimplePreset is false and this reads as the
-      // fuller summary rather than the plain "Weekly" quick-preset label.
-      expect(find.text('Every 1 week on Tue'), findsOneWidget);
+      // interval 1, on the reminder's own weekday, never-ending. That
+      // weekday selection (even though it's just the one day the reminder
+      // already falls on) makes weekdays non-empty, so isSimplePreset is
+      // false and this reads as the fuller summary rather than the plain
+      // "Weekly" quick-preset label.
+      final weekday = weekdayShortLabels[reminderAt.weekday];
+      expect(find.text('Every 1 week on $weekday'), findsOneWidget);
     });
 
     testWidgets('backing out of the custom recurrence screen without '

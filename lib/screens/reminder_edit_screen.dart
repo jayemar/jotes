@@ -136,64 +136,73 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
       _repeatRule?.frequency == frequency &&
       (_repeatRule?.isSimplePreset ?? false);
 
-  ListTile _repeatOptionTile({
+  PopupMenuItem<String> _repeatOptionTile({
     required String keySuffix,
     required String label,
     required bool selected,
-    required BuildContext sheetContext,
   }) {
-    return ListTile(
+    return PopupMenuItem<String>(
       key: Key('repeat_option_$keySuffix'),
-      title: Text(label),
-      trailing: selected ? const Icon(Icons.check) : null,
-      onTap: () => Navigator.pop(sheetContext, keySuffix),
+      value: keySuffix,
+      child: ListTile(
+        title: Text(label),
+        trailing: selected ? const Icon(Icons.check) : null,
+        contentPadding: EdgeInsets.zero,
+      ),
     );
   }
 
   /// Mirrors Google Calendar's own repeat picker: the original 5 fixed
   /// presets, "Every weekday" as a 6th quick option, and a trailing
   /// "Custom recurrence..." entry for anything more specific (see
-  /// custom_recurrence_screen.dart). Plain checkmarked ListTiles rather
-  /// than RadioListTile, whose groupValue/onChanged are deprecated as of
-  /// Flutter 3.32 in favor of a RadioGroup ancestor - not worth wrapping
-  /// this transient bottom sheet in one just for that (unlike
-  /// CustomRecurrenceScreen's own persistent, inline "Ends" choice, which
-  /// does use RadioGroup).
-  Future<void> _pickRepeat() async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            _repeatOptionTile(
-              keySuffix: 'none',
-              label: 'Does not repeat',
-              selected: _repeatRule == null,
-              sheetContext: sheetContext,
-            ),
-            for (final frequency in RepeatFrequency.values)
-              _repeatOptionTile(
-                keySuffix: frequency.name,
-                label: _quickPresetLabel(frequency),
-                selected: _isQuickPreset(frequency),
-                sheetContext: sheetContext,
-              ),
-            _repeatOptionTile(
-              keySuffix: 'everyWeekday',
-              label: 'Every weekday',
-              selected: _repeatRule?.isEveryWeekday ?? false,
-              sheetContext: sheetContext,
-            ),
-            const Divider(height: 1),
-            ListTile(
-              key: const Key('repeat_option_custom'),
-              title: const Text('Custom recurrence...'),
-              onTap: () => Navigator.pop(sheetContext, 'custom'),
-            ),
-          ],
+  /// custom_recurrence_screen.dart). A popup anchored right next to the
+  /// Repeat row itself (see [anchorContext]) rather than a bottom sheet -
+  /// same technique, same reasoning, as notes_screen.dart's own anchored
+  /// pickers (Filter/Layout/Sort).
+  Future<void> _pickRepeat(BuildContext anchorContext) async {
+    final overlay =
+        Overlay.of(anchorContext).context.findRenderObject() as RenderBox;
+    final button = anchorContext.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
         ),
       ),
+      Offset.zero & overlay.size,
+    );
+    final action = await showMenu<String>(
+      context: anchorContext,
+      position: position,
+      items: [
+        _repeatOptionTile(
+          keySuffix: 'none',
+          label: 'Does not repeat',
+          selected: _repeatRule == null,
+        ),
+        for (final frequency in RepeatFrequency.values)
+          _repeatOptionTile(
+            keySuffix: frequency.name,
+            label: _quickPresetLabel(frequency),
+            selected: _isQuickPreset(frequency),
+          ),
+        _repeatOptionTile(
+          keySuffix: 'everyWeekday',
+          label: 'Every weekday',
+          selected: _repeatRule?.isEveryWeekday ?? false,
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          key: const Key('repeat_option_custom'),
+          value: 'custom',
+          child: const ListTile(
+            title: Text('Custom recurrence...'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      ],
     );
     if (action == null || !mounted) return;
 
@@ -283,12 +292,14 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
             onTap: _pickTime,
           ),
           const Divider(height: 1),
-          ListTile(
-            key: const Key('reminder_edit_repeat'),
-            leading: const Icon(Icons.repeat),
-            title: const Text('Repeat'),
-            subtitle: Text(repeatRuleLabel(_repeatRule)),
-            onTap: _pickRepeat,
+          Builder(
+            builder: (repeatRowContext) => ListTile(
+              key: const Key('reminder_edit_repeat'),
+              leading: const Icon(Icons.repeat),
+              title: const Text('Repeat'),
+              subtitle: Text(repeatRuleLabel(_repeatRule)),
+              onTap: () => _pickRepeat(repeatRowContext),
+            ),
           ),
         ],
       ),

@@ -98,6 +98,13 @@ class Note {
   /// rule never actually reads this.
   final int repeatOccurrenceNumber;
 
+  /// Whether this note is pinned - pinned notes always sort to the top of
+  /// the grid/list regardless of the chosen [NoteSortOrder] (see
+  /// applyNotesView in notes_view_provider.dart), the same way Keep's own
+  /// pinning works. Synced like any other field, so pinning on one device
+  /// pins everywhere.
+  final bool pinned;
+
   const Note({
     required this.id,
     this.title = '',
@@ -110,6 +117,7 @@ class Note {
     this.reminderResolved = false,
     this.repeatRule,
     this.repeatOccurrenceNumber = 1,
+    this.pinned = false,
   });
 
   bool get isEmpty => title.isEmpty && body.isEmpty && reminderAt == null;
@@ -125,14 +133,16 @@ class Note {
     bool? reminderResolved,
     Object? repeatRule = _sentinel,
     int? repeatOccurrenceNumber,
+    bool? pinned,
   }) {
     return Note(
       id: id,
       title: title ?? this.title,
       body: body ?? this.body,
       colorIndex: colorIndex ?? this.colorIndex,
-      reminderAt:
-          identical(reminderAt, _sentinel) ? this.reminderAt : reminderAt as DateTime?,
+      reminderAt: identical(reminderAt, _sentinel)
+          ? this.reminderAt
+          : reminderAt as DateTime?,
       created: created,
       updated: updated ?? this.updated,
       reminderResolved: reminderResolved ?? this.reminderResolved,
@@ -141,50 +151,54 @@ class Note {
           : repeatRule as RepeatRule?,
       repeatOccurrenceNumber:
           repeatOccurrenceNumber ?? this.repeatOccurrenceNumber,
+      pinned: pinned ?? this.pinned,
     );
   }
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'title': title,
-        'body': body,
-        'color_index': colorIndex,
-        'reminder_at': reminderAt?.millisecondsSinceEpoch,
-        'created': created.millisecondsSinceEpoch,
-        'updated': updated.millisecondsSinceEpoch,
-        'reminder_resolved': reminderResolved,
-        'repeat_rule': repeatRule == null ? null : jsonEncode(repeatRule!.toJson()),
-        'repeat_occurrence_number': repeatOccurrenceNumber,
-      };
+    'id': id,
+    'title': title,
+    'body': body,
+    'color_index': colorIndex,
+    'reminder_at': reminderAt?.millisecondsSinceEpoch,
+    'created': created.millisecondsSinceEpoch,
+    'updated': updated.millisecondsSinceEpoch,
+    'reminder_resolved': reminderResolved,
+    'repeat_rule': repeatRule == null ? null : jsonEncode(repeatRule!.toJson()),
+    'repeat_occurrence_number': repeatOccurrenceNumber,
+    'pinned': pinned,
+  };
 
   factory Note.fromMap(Map<String, dynamic> map) => Note(
-        id: map['id'] as String,
-        title: (map['title'] as String?) ?? '',
-        body: (map['body'] as String?) ?? '',
-        colorIndex: (map['color_index'] as int?) ?? 0,
-        reminderAt: map['reminder_at'] != null
-            ? DateTime.fromMillisecondsSinceEpoch(map['reminder_at'] as int)
-            : null,
-        created: DateTime.fromMillisecondsSinceEpoch(map['created'] as int),
-        updated: DateTime.fromMillisecondsSinceEpoch(map['updated'] as int),
-        reminderResolved: (map['reminder_resolved'] as bool?) ?? false,
-        repeatRule: RepeatRule.fromJson(map['repeat_rule'] as String?),
-        repeatOccurrenceNumber: (map['repeat_occurrence_number'] as int?) ?? 1,
-      );
+    id: map['id'] as String,
+    title: (map['title'] as String?) ?? '',
+    body: (map['body'] as String?) ?? '',
+    colorIndex: (map['color_index'] as int?) ?? 0,
+    reminderAt: map['reminder_at'] != null
+        ? DateTime.fromMillisecondsSinceEpoch(map['reminder_at'] as int)
+        : null,
+    created: DateTime.fromMillisecondsSinceEpoch(map['created'] as int),
+    updated: DateTime.fromMillisecondsSinceEpoch(map['updated'] as int),
+    reminderResolved: (map['reminder_resolved'] as bool?) ?? false,
+    repeatRule: RepeatRule.fromJson(map['repeat_rule'] as String?),
+    repeatOccurrenceNumber: (map['repeat_occurrence_number'] as int?) ?? 1,
+    pinned: (map['pinned'] as bool?) ?? false,
+  );
 
   Map<String, dynamic> toPocketBase() => {
-        'title': title,
-        'body': body,
-        'color_index': colorIndex,
-        'reminder_at': reminderAt?.toUtc().toIso8601String() ?? '',
-        // A local note is by definition active, not a tombstone - pushing
-        // one up (e.g. from mergeSync's local-is-newer branch) must always
-        // clear a stale remote tombstone rather than leave it set.
-        'deleted': false,
-        'reminder_resolved': reminderResolved,
-        'repeat_rule': repeatRule == null ? '' : jsonEncode(repeatRule!.toJson()),
-        'repeat_occurrence_number': repeatOccurrenceNumber,
-      };
+    'title': title,
+    'body': body,
+    'color_index': colorIndex,
+    'reminder_at': reminderAt?.toUtc().toIso8601String() ?? '',
+    // A local note is by definition active, not a tombstone - pushing
+    // one up (e.g. from mergeSync's local-is-newer branch) must always
+    // clear a stale remote tombstone rather than leave it set.
+    'deleted': false,
+    'reminder_resolved': reminderResolved,
+    'repeat_rule': repeatRule == null ? '' : jsonEncode(repeatRule!.toJson()),
+    'repeat_occurrence_number': repeatOccurrenceNumber,
+    'pinned': pinned,
+  };
 
   factory Note.fromPocketBase(Map<String, dynamic> r) {
     final now = DateTime.now();
@@ -206,7 +220,9 @@ class Note {
       deleted: r['deleted'] == true,
       reminderResolved: r['reminder_resolved'] == true,
       repeatRule: RepeatRule.fromJson(r['repeat_rule'] as String?),
-      repeatOccurrenceNumber: (r['repeat_occurrence_number'] as num?)?.toInt() ?? 1,
+      repeatOccurrenceNumber:
+          (r['repeat_occurrence_number'] as num?)?.toInt() ?? 1,
+      pinned: r['pinned'] == true,
     );
   }
 }
@@ -233,7 +249,11 @@ Note noteAfterDismiss(Note note) {
     return note.copyWith(reminderResolved: true, updated: DateTime.now());
   }
 
-  final next = nextRuleOccurrence(reminderAt, note.repeatOccurrenceNumber, rule);
+  final next = nextRuleOccurrence(
+    reminderAt,
+    note.repeatOccurrenceNumber,
+    rule,
+  );
   if (next == null) {
     return note.copyWith(
       reminderResolved: true,

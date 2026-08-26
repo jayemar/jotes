@@ -15,6 +15,7 @@ Note _existingNote({
   String body = 'One line',
   DateTime? reminderAt,
   RepeatRule? repeatRule,
+  bool pinned = false,
 }) {
   final now = DateTime.now();
   return Note(
@@ -26,6 +27,7 @@ Note _existingNote({
     created: now,
     updated: now,
     repeatRule: repeatRule,
+    pinned: pinned,
   );
 }
 
@@ -214,7 +216,12 @@ void _mainWidgetTests() {
 
       expect(
         tester
-            .widget<ListTile>(find.byKey(const Key('repeat_option_none')))
+            .widget<ListTile>(
+              find.descendant(
+                of: find.byKey(const Key('repeat_option_none')),
+                matching: find.byType(ListTile),
+              ),
+            )
             .trailing,
         isNotNull,
       );
@@ -465,6 +472,10 @@ void _mainWidgetTests() {
 
       expect(find.byIcon(Icons.palette_outlined), findsNothing);
 
+      final menuBottom = tester
+          .getBottomLeft(find.byKey(const Key('note_more_menu')))
+          .dy;
+
       await tester.tap(find.byKey(const Key('note_more_menu')));
       await tester.pumpAndSettle();
       expect(find.text('Change color'), findsOneWidget);
@@ -473,6 +484,13 @@ void _mainWidgetTests() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('color_swatch_2')), findsOneWidget);
 
+      // Opens as a popup anchored near the overflow menu button, not a
+      // bottom sheet rising from the bottom of the screen.
+      final swatchTop = tester
+          .getTopLeft(find.byKey(const Key('color_swatch_2')))
+          .dy;
+      expect(swatchTop, lessThan(menuBottom + 150));
+
       await tester.tap(find.byKey(const Key('color_swatch_2')));
       await tester.pumpAndSettle();
       // Change color only marks the note dirty and starts the same
@@ -480,6 +498,68 @@ void _mainWidgetTests() {
       await tester.pump(const Duration(seconds: 3));
 
       expect(notifier.saved.single.colorIndex, 2);
+    },
+  );
+
+  testWidgets(
+    'the overflow menu offers Pin for an unpinned note, and tapping it '
+    'saves immediately (not deferred to the debounced autosave) since '
+    'pinning is meant to be seen back on the notes list right away',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      expect(find.text('Pin'), findsOneWidget);
+      expect(find.text('Unpin'), findsNothing);
+
+      await tester.tap(find.text('Pin'));
+      // No debounce wait - a save should already have happened.
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved.single.pinned, isTrue);
+    },
+  );
+
+  testWidgets(
+    'the overflow menu offers Unpin (not Pin) for an already-pinned note, '
+    'and tapping it unpins',
+    (tester) async {
+      final note = _existingNote(body: 'plain text', pinned: true);
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      expect(find.text('Unpin'), findsOneWidget);
+      expect(find.text('Pin'), findsNothing);
+
+      await tester.tap(find.text('Unpin'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved.single.pinned, isFalse);
     },
   );
 

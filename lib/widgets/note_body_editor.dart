@@ -387,7 +387,11 @@ class NumberedBodyBlock extends BodyBlock {
   final int number;
   final String text;
   final int indent;
-  NumberedBodyBlock({required this.number, required this.text, this.indent = 0});
+  NumberedBodyBlock({
+    required this.number,
+    required this.text,
+    this.indent = 0,
+  });
 }
 
 /// One block from [parseBodyWithOffsets], carrying its position in the
@@ -828,16 +832,48 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     widget.onChanged(_rawBody);
   }
 
+  /// Checking an item sinks it to the bottom of its own contiguous
+  /// checklist run (same run boundaries drag-reorder respects - a checked
+  /// item never crosses a paragraph into a separate checklist group),
+  /// matching Keep's own "checked items sink to the bottom" behavior.
+  /// Unchecking does *not* move it back - it stays wherever it currently
+  /// sits until manually reordered, same as Keep.
   void _toggleChecked(int index) {
     final blocks = parseBody(_rawBody);
     final target = blocks[index] as ChecklistBodyBlock;
+    final becomingChecked = !target.checked;
     _pushUndoSnapshot(blocks);
-    blocks[index] = ChecklistBodyBlock(
-      checked: !target.checked,
+
+    final toggled = ChecklistBodyBlock(
+      checked: becomingChecked,
       text: target.text,
       indent: target.indent,
     );
+
+    if (becomingChecked) {
+      final runEnd = _checklistRunEnd(blocks, index);
+      blocks.removeAt(index);
+      blocks.insert(runEnd - 1, toggled);
+      // The checked item may have been the sole top-level item its own
+      // sub-items depended on - same orphan cleanup the delete/drag paths
+      // already do.
+      _fixOrphanedIndents(blocks);
+    } else {
+      blocks[index] = toggled;
+    }
+
     _commitBlocks(blocks);
+  }
+
+  /// Exclusive end index of the maximal run of consecutive
+  /// [ChecklistBodyBlock]s starting at [index] (which must itself be one) -
+  /// e.g. for `[text, check, check, check, text]`, index 1 returns 4.
+  int _checklistRunEnd(List<BodyBlock> blocks, int index) {
+    var i = index;
+    while (i < blocks.length && blocks[i] is ChecklistBodyBlock) {
+      i += 1;
+    }
+    return i;
   }
 
   void _deleteBlock(int index) {

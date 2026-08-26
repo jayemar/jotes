@@ -242,8 +242,20 @@ void main() {
     await tester.tap(find.text('Beta'));
     await tester.pumpAndSettle();
 
+    final paletteBottom = tester
+        .getBottomLeft(find.byIcon(Icons.palette_outlined))
+        .dy;
+
     await tester.tap(find.byIcon(Icons.palette_outlined));
     await tester.pumpAndSettle();
+
+    // Opens as a popup anchored near the palette icon, not a bottom sheet
+    // rising from the bottom of the screen.
+    final swatchTop = tester
+        .getTopLeft(find.byKey(const ValueKey('color_swatch_1')))
+        .dy;
+    expect(swatchTop, lessThan(paletteBottom + 150));
+
     await tester.tap(find.byKey(const ValueKey('color_swatch_1'))); // red
     await tester.pumpAndSettle();
 

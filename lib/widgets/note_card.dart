@@ -97,6 +97,19 @@ class NoteCard extends StatelessWidget {
                 ],
               ],
             ),
+            // Not shown alongside the selection indicator below - they'd
+            // occupy the same corner, and which notes are selected is the
+            // more immediate question once selecting has actually started.
+            if (note.pinned && !selectionMode)
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Icon(
+                  Icons.push_pin,
+                  color: textColor.withAlpha(150),
+                  size: 16,
+                ),
+              ),
             if (selectionMode)
               Positioned(
                 top: 0,
@@ -300,7 +313,11 @@ class _ListMarkerPreviewRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final baseStyle = TextStyle(fontSize: 13, color: textColor.withAlpha(220));
     return Padding(
-      padding: EdgeInsets.only(left: indent * checklistIndentStepPx, top: 1, bottom: 1),
+      padding: EdgeInsets.only(
+        left: indent * checklistIndentStepPx,
+        top: 1,
+        bottom: 1,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

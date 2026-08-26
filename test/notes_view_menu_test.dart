@@ -41,6 +41,9 @@ Future<_FakeNotesNotifier> _pumpNotes(
   WidgetTester tester,
   List<Note> notes, {
   Map<String, Object> initialPrefs = const {},
+  // Simulates a device's bottom safe-area inset (e.g. an on-screen
+  // gesture/nav bar) - see the "bottom safe-area padding" group below.
+  double bottomInset = 0,
 }) async {
   SharedPreferences.setMockInitialValues(initialPrefs);
   final notifier = _FakeNotesNotifier(notes);
@@ -51,7 +54,12 @@ Future<_FakeNotesNotifier> _pumpNotes(
   await tester.pumpWidget(
     UncontrolledProviderScope(
       container: container,
-      child: const MaterialApp(home: NotesScreen()),
+      child: MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(padding: EdgeInsets.only(bottom: bottomInset)),
+          child: const NotesScreen(),
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -66,7 +74,9 @@ Future<void> _openMenu(WidgetTester tester) async {
 void main() {
   testWidgets(
     'the overflow menu sits to the right of the sync indicator and shows '
-    'the current filter/layout/sort choices',
+    'the current layout/sort choices, but not Filter - that\'s only '
+    'reached via the search field\'s own reminder-visibility icon (see its '
+    'own group below), not duplicated here too',
     (tester) async {
       await _pumpNotes(tester, [_note('a', title: 'Only note')]);
 
@@ -79,8 +89,7 @@ void main() {
 
       await _openMenu(tester);
 
-      expect(find.text('Filter'), findsOneWidget);
-      expect(find.text('All notes'), findsOneWidget);
+      expect(find.text('Filter'), findsNothing);
       expect(find.text('Layout'), findsOneWidget);
       expect(find.text('Card'), findsOneWidget);
       expect(find.text('Sort by'), findsOneWidget);
@@ -114,9 +123,10 @@ void main() {
     );
 
     testWidgets(
-      'tapping it opens the same filter picker as the overflow menu\'s '
-      'Filter option, and choosing "With reminders" narrows the grid and '
-      'updates the icon',
+      'tapping it opens the filter picker, and choosing "With reminders" '
+      'narrows the grid and updates the icon - the only entry point for '
+      'this choice, since the overflow menu deliberately does not '
+      'duplicate it (see the top-level test above)',
       (tester) async {
         await _pumpNotes(
           tester,
@@ -128,8 +138,6 @@ void main() {
               reminderAt: DateTime.now().add(const Duration(hours: 1)),
             ),
           ],
-          // Same overflow-triggered narrow-column overflow the Filter
-          // group above sidesteps - see its own comment.
           initialPrefs: {'notes_view_layout': 'list'},
         );
 
@@ -151,11 +159,6 @@ void main() {
           ).icon,
           Icons.alarm,
         );
-
-        // The overflow menu's own Filter option reflects the same choice -
-        // one shared piece of state behind both entry points.
-        await _openMenu(tester);
-        expect(find.text('With reminders'), findsOneWidget);
       },
     );
 
@@ -213,40 +216,6 @@ void main() {
 
   group('Filter', () {
     testWidgets(
-      'choosing "With reminders" narrows the grid to only notes with a '
-      'reminder set',
-      (tester) async {
-        // Pre-seeded to list layout - the masonry card grid's narrow
-        // (<=180dp) columns overflow the reminder chip's own Row at this
-        // test window's default width, an unrelated rendering issue this
-        // test isn't about.
-        await _pumpNotes(
-          tester,
-          [
-            _note('no-reminder', title: 'No reminder'),
-            _note(
-              'has-reminder',
-              title: 'Has reminder',
-              reminderAt: DateTime.now().add(const Duration(hours: 1)),
-            ),
-          ],
-          initialPrefs: {'notes_view_layout': 'list'},
-        );
-
-        await _openMenu(tester);
-        await tester.tap(find.text('Filter'));
-        await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const Key('notes_view_option_withReminders')),
-        );
-        await tester.pumpAndSettle();
-
-        expect(find.text('Has reminder'), findsOneWidget);
-        expect(find.text('No reminder'), findsNothing);
-      },
-    );
-
-    testWidgets(
       'a filter that matches nothing shows a filter-specific empty message, '
       'not the "no notes yet" one',
       (tester) async {
@@ -254,8 +223,7 @@ void main() {
           _note('no-reminder', title: 'No reminder'),
         ]);
 
-        await _openMenu(tester);
-        await tester.tap(find.text('Filter'));
+        await tester.tap(find.byKey(const Key('reminder_visibility_button')));
         await tester.pumpAndSettle();
         await tester.tap(
           find.byKey(const Key('notes_view_option_withReminders')),
@@ -302,6 +270,26 @@ void main() {
           tester.getTopLeft(cards.at(0)).dx,
           tester.getTopLeft(cards.at(1)).dx,
         );
+      },
+    );
+
+    testWidgets(
+      'opens as a popup anchored near the overflow menu button, not a '
+      'bottom sheet rising from the bottom of the screen',
+      (tester) async {
+        await _pumpNotes(tester, [_note('a', title: 'Only note')]);
+        final menuBottom = tester
+            .getBottomLeft(find.byKey(const Key('notes_view_menu')))
+            .dy;
+
+        await _openMenu(tester);
+        await tester.tap(find.text('Layout'));
+        await tester.pumpAndSettle();
+
+        final optionTop = tester
+            .getTopLeft(find.byKey(const Key('notes_view_option_card')))
+            .dy;
+        expect(optionTop, lessThan(menuBottom + 150));
       },
     );
   });
@@ -356,6 +344,56 @@ void main() {
     },
   );
 
+  group('bottom safe-area padding (see _NoteGrid.bottomInset)', () {
+    testWidgets(
+      'the card grid\'s trailing padding grows to include the device\'s '
+      'bottom safe-area inset, not just the fixed 8px margin, so the last '
+      'row is not left unreachable behind an on-screen gesture/nav bar',
+      (tester) async {
+        await _pumpNotes(
+          tester,
+          [_note('a', title: 'Only note')],
+          bottomInset: 40,
+        );
+
+        final padding =
+            tester.widget<SliverPadding>(find.byType(SliverPadding)).padding
+                as EdgeInsets;
+        expect(padding.bottom, 48);
+      },
+    );
+
+    testWidgets(
+      'the list layout\'s trailing padding does the same',
+      (tester) async {
+        await _pumpNotes(
+          tester,
+          [_note('a', title: 'Only note')],
+          initialPrefs: {'notes_view_layout': 'list'},
+          bottomInset: 40,
+        );
+
+        final padding =
+            tester.widget<SliverPadding>(find.byType(SliverPadding)).padding
+                as EdgeInsets;
+        expect(padding.bottom, 48);
+      },
+    );
+
+    testWidgets(
+      'with no safe-area inset (most desktop/emulator setups), the '
+      'trailing padding stays at the plain 8px margin',
+      (tester) async {
+        await _pumpNotes(tester, [_note('a', title: 'Only note')]);
+
+        final padding =
+            tester.widget<SliverPadding>(find.byType(SliverPadding)).padding
+                as EdgeInsets;
+        expect(padding.bottom, 8);
+      },
+    );
+  });
+
   group('Sort by', () {
     testWidgets(
       'choosing Title (A-Z) reorders the grid alphabetically',
@@ -383,6 +421,28 @@ void main() {
             .map((t) => t.data)
             .toList();
         expect(titles, ['Apple', 'Banana', 'Cherry']);
+      },
+    );
+
+    testWidgets(
+      'opens as a popup anchored near the overflow menu button, not a '
+      'bottom sheet rising from the bottom of the screen',
+      (tester) async {
+        await _pumpNotes(tester, [_note('a', title: 'Only note')]);
+        final menuBottom = tester
+            .getBottomLeft(find.byKey(const Key('notes_view_menu')))
+            .dy;
+
+        await _openMenu(tester);
+        await tester.tap(find.text('Sort by'));
+        await tester.pumpAndSettle();
+
+        final optionTop = tester
+            .getTopLeft(
+              find.byKey(const Key('notes_view_option_updatedNewest')),
+            )
+            .dy;
+        expect(optionTop, lessThan(menuBottom + 150));
       },
     );
   });

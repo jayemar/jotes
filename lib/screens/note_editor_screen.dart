@@ -50,6 +50,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   bool _reminderResolved = false;
   RepeatRule? _repeatRule;
   int _repeatOccurrenceNumber = 1;
+  bool _pinned = false;
   bool _dirty = false;
   bool _saving = false;
 
@@ -78,6 +79,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     _reminderResolved = n?.reminderResolved ?? false;
     _repeatRule = n?.repeatRule;
     _repeatOccurrenceNumber = n?.repeatOccurrenceNumber ?? 1;
+    _pinned = n?.pinned ?? false;
     _lastKnownUpdated = n?.updated;
     // Generated once per editing session so repeated saves (e.g. multiple
     // back-button presses before the first save/pop completes) update the
@@ -121,6 +123,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       reminderResolved: _reminderResolved,
       repeatRule: _repeatRule,
       repeatOccurrenceNumber: _repeatOccurrenceNumber,
+      pinned: _pinned,
     );
   }
 
@@ -182,6 +185,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       _reminderResolved = remote.reminderResolved;
       _repeatRule = remote.repeatRule;
       _repeatOccurrenceNumber = remote.repeatOccurrenceNumber;
+      _pinned = remote.pinned;
       _lastKnownUpdated = remote.updated;
     });
     _bodyEditorKey.currentState?.applyExternalBody(remote.body);
@@ -321,11 +325,28 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     await _save();
   }
 
-  Future<void> _pickColor() async {
-    final index = await showColorPickerSheet(context, selected: _colorIndex);
+  Future<void> _pickColor(BuildContext anchorContext) async {
+    final index = await showColorPickerSheet(
+      anchorContext,
+      selected: _colorIndex,
+    );
     if (index == null || !mounted) return;
     setState(() => _colorIndex = index);
     _markDirty();
+  }
+
+  /// Saves immediately rather than deferring to the usual debounced
+  /// autosave (see _markDirty) - same reasoning as _clearReminder's own
+  /// immediate save: pinning's whole point is to change this note's
+  /// position in the grid/list, and leaving this screen via the home
+  /// button/app switcher before the debounce fires would otherwise show
+  /// the pin having silently done nothing.
+  Future<void> _togglePinned() async {
+    setState(() {
+      _pinned = !_pinned;
+      _dirty = true;
+    });
+    await _save();
   }
 
   /// Exports the note's current in-progress state (not just its last-saved
@@ -608,10 +629,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                       tooltip: 'Toggle list item',
                     ),
                     IconButton(
-                      icon: Icon(
-                        Icons.arrow_upward_outlined,
-                        color: textColor,
-                      ),
+                      icon: Icon(Icons.arrow_upward_outlined, color: textColor),
                       onPressed:
                           _bodyEditorKey.currentState?.isEditingBody == true
                           ? () => _bodyEditorKey.currentState?.moveLineUp()
@@ -637,72 +655,88 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                       tooltip: 'Undo last checklist change',
                     ),
                     const Spacer(),
-                    PopupMenuButton<String>(
-                      key: const Key('note_more_menu'),
-                      icon: Icon(Icons.more_vert, color: textColor),
-                      tooltip: 'More options',
-                      onSelected: (value) {
-                        switch (value) {
-                          case 'color':
-                            _pickColor();
-                          case 'export':
-                            _exportToMarkdown();
-                          case 'share':
-                            _shareNote();
-                          case 'duplicate':
-                            _duplicateNote();
-                          case 'delete':
-                            _deleteNote();
-                        }
-                      },
-                      itemBuilder: (context) => [
-                        const PopupMenuItem(
-                          value: 'color',
-                          child: ListTile(
-                            leading: Icon(Icons.palette_outlined),
-                            title: Text('Change color'),
-                            contentPadding: EdgeInsets.zero,
+                    Builder(
+                      builder: (menuButtonContext) => PopupMenuButton<String>(
+                        key: const Key('note_more_menu'),
+                        icon: Icon(Icons.more_vert, color: textColor),
+                        tooltip: 'More options',
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'pin':
+                              _togglePinned();
+                            case 'color':
+                              _pickColor(menuButtonContext);
+                            case 'export':
+                              _exportToMarkdown();
+                            case 'share':
+                              _shareNote();
+                            case 'duplicate':
+                              _duplicateNote();
+                            case 'delete':
+                              _deleteNote();
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(
+                            value: 'pin',
+                            child: ListTile(
+                              leading: Icon(
+                                _pinned
+                                    ? Icons.push_pin
+                                    : Icons.push_pin_outlined,
+                              ),
+                              title: Text(_pinned ? 'Unpin' : 'Pin'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
-                        const PopupMenuItem(
-                          value: 'export',
-                          child: ListTile(
-                            leading: Icon(Icons.ios_share_outlined),
-                            title: Text('Export as Markdown'),
-                            contentPadding: EdgeInsets.zero,
+                          const PopupMenuItem(
+                            value: 'color',
+                            child: ListTile(
+                              leading: Icon(Icons.palette_outlined),
+                              title: Text('Change color'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
-                        const PopupMenuItem(
-                          value: 'share',
-                          child: ListTile(
-                            leading: Icon(Icons.share_outlined),
-                            title: Text('Share'),
-                            contentPadding: EdgeInsets.zero,
+                          const PopupMenuItem(
+                            value: 'export',
+                            child: ListTile(
+                              leading: Icon(Icons.ios_share_outlined),
+                              title: Text('Export as Markdown'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
-                        // Offered right away, even for a brand-new note
-                        // that hasn't autosaved yet - _duplicateNote/
-                        // _deleteNote persist it immediately via
-                        // _ensurePersisted rather than requiring
-                        // widget.existing != null first.
-                        const PopupMenuItem(
-                          value: 'duplicate',
-                          child: ListTile(
-                            leading: Icon(Icons.copy_outlined),
-                            title: Text('Duplicate'),
-                            contentPadding: EdgeInsets.zero,
+                          const PopupMenuItem(
+                            value: 'share',
+                            child: ListTile(
+                              leading: Icon(Icons.share_outlined),
+                              title: Text('Share'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
-                        const PopupMenuDivider(),
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: ListTile(
-                            leading: Icon(Icons.delete_outline),
-                            title: Text('Delete'),
-                            contentPadding: EdgeInsets.zero,
+                          // Offered right away, even for a brand-new note
+                          // that hasn't autosaved yet - _duplicateNote/
+                          // _deleteNote persist it immediately via
+                          // _ensurePersisted rather than requiring
+                          // widget.existing != null first.
+                          const PopupMenuItem(
+                            value: 'duplicate',
+                            child: ListTile(
+                              leading: Icon(Icons.copy_outlined),
+                              title: Text('Duplicate'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
-                      ],
+                          const PopupMenuDivider(),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: ListTile(
+                              leading: Icon(Icons.delete_outline),
+                              title: Text('Delete'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),

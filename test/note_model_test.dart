@@ -10,6 +10,7 @@ Note _note({
   bool reminderResolved = false,
   RepeatRule? repeatRule,
   int repeatOccurrenceNumber = 1,
+  bool pinned = false,
 }) {
   final now = DateTime.now();
   return Note(
@@ -22,6 +23,7 @@ Note _note({
     reminderResolved: reminderResolved,
     repeatRule: repeatRule,
     repeatOccurrenceNumber: repeatOccurrenceNumber,
+    pinned: pinned,
   );
 }
 
@@ -280,6 +282,55 @@ void main() {
 
       expect(restored.repeatRule, isNull);
       expect(restored.repeatOccurrenceNumber, 1);
+    });
+  });
+
+  group('Note.pinned', () {
+    test('defaults to false', () {
+      expect(_note().pinned, isFalse);
+    });
+
+    test('copyWith sets it independently of other fields', () {
+      final note = _note(pinned: false);
+      final pinned = note.copyWith(pinned: true);
+
+      expect(pinned.pinned, isTrue);
+      expect(pinned.title, note.title);
+    });
+
+    test('round-trips through toMap/fromMap (local storage)', () {
+      final note = _note(pinned: true);
+
+      final restored = Note.fromMap(note.toMap());
+
+      expect(restored.pinned, isTrue);
+    });
+
+    test('fromMap falls back to false for a note saved before this field '
+        'existed', () {
+      final map = _note(pinned: true).toMap()..remove('pinned');
+
+      final restored = Note.fromMap(map);
+
+      expect(restored.pinned, isFalse);
+    });
+
+    test('round-trips through toPocketBase/fromPocketBase (server sync)', () {
+      final note = _note(pinned: true);
+
+      final restored = Note.fromPocketBase({
+        'id': note.id,
+        ...note.toPocketBase(),
+      });
+
+      expect(restored.pinned, isTrue);
+    });
+
+    test('fromPocketBase falls back to false for an un-migrated or '
+        'untouched server record with no pinned value', () {
+      final restored = Note.fromPocketBase({'id': 'n1'});
+
+      expect(restored.pinned, isFalse);
     });
   });
 }

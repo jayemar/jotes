@@ -37,6 +37,13 @@ class RemindersScreen extends ConsumerWidget {
             return const Center(child: Text('No reminders'));
           }
           return ListView.separated(
+            // Without this, the Scaffold's plain body (never wrapped in a
+            // SafeArea) leaves the last row sitting flush against an
+            // on-screen gesture/nav bar on an edge-to-edge display - same
+            // fix as _NoteGrid's own bottomInset in notes_screen.dart.
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.paddingOf(context).bottom,
+            ),
             itemCount: reminders.length,
             separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (context, index) {

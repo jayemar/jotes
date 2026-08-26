@@ -86,4 +86,29 @@ void main() {
 
     expect(find.byType(SyncSettingsScreen), findsOneWidget);
   });
+
+  testWidgets(
+    'the app bar keeps its leading/title spacing tight, and the sync '
+    'indicator\'s own padding modest, so the search field gets as much '
+    'width as possible rather than losing it to dead space',
+    (tester) async {
+      await _pumpNotesScreen(tester, SyncState.initial);
+
+      final appBar = tester.widget<SliverAppBar>(find.byType(SliverAppBar));
+      expect(appBar.leadingWidth, 48);
+      expect(appBar.titleSpacing, 4);
+
+      final indicatorPadding = tester
+          .widget<Padding>(
+            find
+                .ancestor(
+                  of: find.byKey(const Key('sync_indicator')),
+                  matching: find.byType(Padding),
+                )
+                .first,
+          )
+          .padding;
+      expect(indicatorPadding, const EdgeInsets.all(8));
+    },
+  );
 }

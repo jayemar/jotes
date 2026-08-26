@@ -10,6 +10,7 @@ Note _note({
   DateTime? reminderAt,
   DateTime? created,
   DateTime? updated,
+  bool pinned = false,
 }) {
   final now = DateTime.now();
   return Note(
@@ -18,6 +19,7 @@ Note _note({
     reminderAt: reminderAt,
     created: created ?? now,
     updated: updated ?? now,
+    pinned: pinned,
   );
 }
 
@@ -198,6 +200,55 @@ void main() {
       expect(result.map((n) => n.id), [
         'no-reminder-older',
         'no-reminder-newer',
+      ]);
+    });
+
+    test('pinned notes always sort above unpinned ones, regardless of '
+        'sort order', () {
+      final notes = [
+        _note(id: 'unpinned-newer', updated: DateTime(2026, 3, 1)),
+        _note(
+          id: 'pinned-older',
+          updated: DateTime(2026, 1, 1),
+          pinned: true,
+        ),
+        _note(id: 'unpinned-older', updated: DateTime(2026, 2, 1)),
+      ];
+
+      // Even though "pinned-older" is the oldest by the chosen sort order,
+      // it still sorts to the very top.
+      final result = applyNotesView(notes, NotesViewState.initial);
+
+      expect(result.map((n) => n.id), [
+        'pinned-older',
+        'unpinned-newer',
+        'unpinned-older',
+      ]);
+    });
+
+    test('the chosen sort order still applies within the pinned and '
+        'unpinned groups separately, not just across the whole list', () {
+      final notes = [
+        _note(id: 'pinned-b', title: 'Bravo', pinned: true),
+        _note(id: 'pinned-a', title: 'Alpha', pinned: true),
+        _note(id: 'unpinned-b', title: 'Bravo'),
+        _note(id: 'unpinned-a', title: 'Alpha'),
+      ];
+
+      final result = applyNotesView(
+        notes,
+        const NotesViewState(
+          filter: NoteReminderFilter.all,
+          layout: NoteLayout.card,
+          sortOrder: NoteSortOrder.titleAZ,
+        ),
+      );
+
+      expect(result.map((n) => n.id), [
+        'pinned-a',
+        'pinned-b',
+        'unpinned-a',
+        'unpinned-b',
       ]);
     });
   });
