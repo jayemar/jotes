@@ -79,11 +79,14 @@ class Note {
 
   /// The recurrence rule this reminder repeats under - see [RepeatRule].
   /// Null means "does not repeat" (also its own end state once a rule with
-  /// a [RepeatEnd] condition runs its course - see
-  /// NotificationService.advanceOverdueRepeatingReminders). Rolled forward
-  /// automatically on Dismiss (not Snooze, which only delays this one
-  /// occurrence without advancing the cycle - see reminder_popup.dart)
-  /// rather than marking [reminderResolved] and stopping there: Dismissing
+  /// a [RepeatEnd] condition runs its course - see [noteAfterDismiss]).
+  /// Rolled forward only on an explicit Dismiss (not Snooze, which only
+  /// delays this one occurrence without advancing the cycle - see
+  /// reminder_popup.dart), and only ever via [noteAfterDismiss] - a fired
+  /// occurrence that's never dismissed (including one whose tray
+  /// notification gets swiped away, which Android gives this app no
+  /// callback for) stays exactly as overdue/unresolved as a non-repeating
+  /// reminder would, rather than silently moving on by itself. Dismissing
   /// a repeating reminder computes the next [reminderAt] from the current
   /// one via [nextRuleOccurrence] and clears [reminderResolved] for that
   /// fresh cycle, the same way setting a brand new reminderAt already

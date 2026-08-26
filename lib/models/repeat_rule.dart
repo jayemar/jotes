@@ -331,9 +331,10 @@ bool _isPastEnd(RepeatRule rule, DateTime date, int occurrenceNumber) {
 /// the real current time) - skipping past however many cycles have
 /// already been missed, the same "don't get stuck re-landing on an
 /// already-past time" reasoning the old nextFutureOccurrence had for the
-/// original fixed presets (see NotificationService.
-/// advanceOverdueRepeatingReminders). Always advances by at least one step
-/// even if [from] itself is already after [now].
+/// original fixed presets (see noteAfterDismiss in note.dart, its sole
+/// caller - a reminder only ever advances via an explicit Dismiss, however
+/// many cycles late that Dismiss happens to land). Always advances by at
+/// least one step even if [from] itself is already after [now].
 ///
 /// Returns null once [rule]'s own [RepeatEnd] is reached partway through
 /// that walk - not "this occurrence is done" but "this reminder has

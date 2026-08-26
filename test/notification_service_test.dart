@@ -272,181 +272,34 @@ void main() {
       },
     );
 
-    test('advances an overdue repeating reminder instead of re-showing its '
-        'stale notification - advanceOverdueRepeatingReminders runs first, '
-        'so it no longer matches this function\'s own overdue query', () async {
-      final shown = <String>[];
-      NotificationService.instance.debugOnShow = (note) => shown.add(note.id);
-      final scheduled = <Note>[];
-      NotificationService.instance.debugOnSchedule = scheduled.add;
-      BackgroundSyncService.instance.debugEnqueue = () async {};
-      await DbService.instance.upsert(
-        _note(
-          id: 'overdue-repeating-restore',
-          reminderAt: DateTime.now().subtract(const Duration(minutes: 5)),
-          repeatRule: RepeatRule.preset(RepeatFrequency.daily),
-        ),
-      );
-
-      await NotificationService.instance.restoreUnresolvedReminders();
-
-      expect(shown, isNot(contains('overdue-repeating-restore')));
-      expect(scheduled, hasLength(1));
-      expect(scheduled.single.id, 'overdue-repeating-restore');
-    });
-  });
-
-  group('advanceOverdueRepeatingReminders', () {
-    test('rolls an overdue repeating reminder forward to its next future '
-        'occurrence, reschedules it, and enqueues a BackgroundSyncService '
-        'push - regardless of reminderResolved', () async {
-      final scheduled = <Note>[];
-      NotificationService.instance.debugOnSchedule = scheduled.add;
-      var enqueued = 0;
-      BackgroundSyncService.instance.debugEnqueue = () async {
-        enqueued++;
-      };
-      final reminderAt = DateTime.now().subtract(const Duration(minutes: 5));
-      final note = _note(
-        id: 'overdue-repeating',
-        reminderAt: reminderAt,
-        repeatRule: RepeatRule.preset(RepeatFrequency.daily),
-      );
-      await DbService.instance.upsert(note);
-
-      await NotificationService.instance.advanceOverdueRepeatingReminders();
-
-      final stored = await DbService.instance.getById('overdue-repeating');
-      expect(stored!.reminderResolved, isFalse);
-      expect(
-        stored.reminderAt!.millisecondsSinceEpoch,
-        reminderAt.add(const Duration(days: 1)).millisecondsSinceEpoch,
-      );
-      expect(scheduled, hasLength(1));
-      expect(scheduled.single.id, 'overdue-repeating');
-      expect(enqueued, 1);
-    });
-
-    test('advances even when reminderResolved is already true - unlike the '
-        'usual dismiss path, this requires no prior interaction at all',
-        () async {
-      NotificationService.instance.debugOnSchedule = (_) {};
-      BackgroundSyncService.instance.debugEnqueue = () async {};
-      final reminderAt = DateTime.now().subtract(const Duration(minutes: 5));
-      await DbService.instance.upsert(
-        _note(
-          id: 'already-resolved-repeating',
-          reminderAt: reminderAt,
-          reminderResolved: true,
-          repeatRule: RepeatRule.preset(RepeatFrequency.daily),
-        ),
-      );
-
-      await NotificationService.instance.advanceOverdueRepeatingReminders();
-
-      final stored = await DbService.instance.getById(
-        'already-resolved-repeating',
-      );
-      expect(stored!.reminderAt!.isAfter(DateTime.now()), isTrue);
-      expect(stored.reminderResolved, isFalse);
-    });
-
-    test('skips straight to the next occurrence that is actually still '
-        'ahead when several intervals have been missed, not just one step '
-        'forward from the original (still-past) time', () async {
-      NotificationService.instance.debugOnSchedule = (_) {};
-      BackgroundSyncService.instance.debugEnqueue = () async {};
-      await DbService.instance.upsert(
-        _note(
-          id: 'multi-day-stale',
-          reminderAt: DateTime.now().subtract(
-            const Duration(days: 3, minutes: 5),
+    test(
+      '(re)shows an overdue *repeating* reminder exactly like a '
+      'non-repeating one, rather than silently rolling it forward to '
+      'tomorrow just because time passed - a repeating reminder only '
+      'advances via an explicit Dismiss (see noteAfterDismiss in '
+      'note.dart), never on its own',
+      () async {
+        final shown = <String>[];
+        NotificationService.instance.debugOnShow = (note) =>
+            shown.add(note.id);
+        await DbService.instance.upsert(
+          _note(
+            id: 'overdue-repeating-restore',
+            reminderAt: DateTime.now().subtract(const Duration(minutes: 5)),
+            repeatRule: RepeatRule.preset(RepeatFrequency.daily),
           ),
-          repeatRule: RepeatRule.preset(RepeatFrequency.daily),
-        ),
-      );
+        );
 
-      await NotificationService.instance.advanceOverdueRepeatingReminders();
+        await NotificationService.instance.restoreUnresolvedReminders();
 
-      final stored = await DbService.instance.getById('multi-day-stale');
-      expect(stored!.reminderAt!.isAfter(DateTime.now()), isTrue);
-    });
-
-    test('leaves a non-repeating overdue reminder untouched', () async {
-      final scheduled = <Note>[];
-      NotificationService.instance.debugOnSchedule = scheduled.add;
-      final reminderAt = DateTime.now().subtract(const Duration(minutes: 5));
-      await DbService.instance.upsert(
-        _note(id: 'non-repeating', reminderAt: reminderAt),
-      );
-
-      await NotificationService.instance.advanceOverdueRepeatingReminders();
-
-      final stored = await DbService.instance.getById('non-repeating');
-      expect(
-        stored!.reminderAt!.millisecondsSinceEpoch,
-        reminderAt.millisecondsSinceEpoch,
-      );
-      expect(scheduled, isEmpty);
-    });
-
-    test('leaves a repeating reminder that is still upcoming untouched',
-        () async {
-      final scheduled = <Note>[];
-      NotificationService.instance.debugOnSchedule = scheduled.add;
-      final reminderAt = DateTime.now().add(const Duration(hours: 1));
-      await DbService.instance.upsert(
-        _note(
-          id: 'upcoming-repeating',
-          reminderAt: reminderAt,
-          repeatRule: RepeatRule.preset(RepeatFrequency.daily),
-        ),
-      );
-
-      await NotificationService.instance.advanceOverdueRepeatingReminders();
-
-      final stored = await DbService.instance.getById('upcoming-repeating');
-      expect(
-        stored!.reminderAt!.millisecondsSinceEpoch,
-        reminderAt.millisecondsSinceEpoch,
-      );
-      expect(scheduled, isEmpty);
-    });
-
-    test('clears repeatRule (rather than rescheduling) once the rule\'s '
-        'own RepeatEnd condition has been reached, leaving reminderAt/'
-        'reminderResolved untouched so the note falls through to the '
-        'normal non-repeating overdue handling', () async {
-      final scheduled = <Note>[];
-      NotificationService.instance.debugOnSchedule = scheduled.add;
-      var enqueued = 0;
-      BackgroundSyncService.instance.debugEnqueue = () async {
-        enqueued++;
-      };
-      final reminderAt = DateTime.now().subtract(const Duration(minutes: 5));
-      await DbService.instance.upsert(
-        _note(
-          id: 'exhausted-repeating',
-          reminderAt: reminderAt,
-          repeatRule: RepeatRule(
-            frequency: RepeatFrequency.daily,
-            end: const RepeatEndAfterCount(1),
-          ),
-        ),
-      );
-
-      await NotificationService.instance.advanceOverdueRepeatingReminders();
-
-      final stored = await DbService.instance.getById('exhausted-repeating');
-      expect(stored!.repeatRule, isNull);
-      expect(
-        stored.reminderAt!.millisecondsSinceEpoch,
-        reminderAt.millisecondsSinceEpoch,
-      );
-      expect(stored.reminderResolved, isFalse);
-      expect(scheduled, isEmpty);
-      expect(enqueued, 1);
-    });
+        final stored = await DbService.instance.getById(
+          'overdue-repeating-restore',
+        );
+        expect(shown, contains('overdue-repeating-restore'));
+        expect(stored!.reminderAt!.isBefore(DateTime.now()), isTrue);
+        expect(stored.repeatOccurrenceNumber, 1);
+      },
+    );
   });
 
   group('handleBackgroundReminderAction', () {
