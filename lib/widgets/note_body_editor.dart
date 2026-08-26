@@ -206,6 +206,70 @@ TextEditingValue? swapLine({
   );
 }
 
+/// The whole line containing [cursorOffset] in [text], cut out entirely
+/// (not just cleared) - the core logic behind the toolbar's Cut line tool
+/// (see NoteBodyEditorState.cutLine, which copies [cutText] to the
+/// clipboard; this only computes the resulting text/cursor). Removes the
+/// line's own trailing newline if there's a following line to close the
+/// gap with, or the preceding newline otherwise, so cutting never leaves a
+/// stray blank line behind; cutting the only line in the whole note leaves
+/// an empty body. The cursor lands at the start of whatever line now
+/// occupies that position.
+class CutLineResult {
+  final TextEditingValue value;
+  final String cutText;
+  CutLineResult(this.value, this.cutText);
+}
+
+CutLineResult cutLineAt({required String text, required int cursorOffset}) {
+  final lineStart = cursorOffset <= 0
+      ? 0
+      : text.lastIndexOf('\n', cursorOffset - 1) + 1;
+  final nextNewline = text.indexOf('\n', lineStart);
+  final lineEnd = nextNewline == -1 ? text.length : nextNewline;
+  final line = text.substring(lineStart, lineEnd);
+
+  final String newText;
+  final int newCursor;
+  if (nextNewline != -1) {
+    newText = text.replaceRange(lineStart, lineEnd + 1, '');
+    newCursor = lineStart;
+  } else if (lineStart > 0) {
+    newText = text.replaceRange(lineStart - 1, lineEnd, '');
+    newCursor = lineStart - 1;
+  } else {
+    newText = '';
+    newCursor = 0;
+  }
+
+  return CutLineResult(
+    TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newCursor),
+    ),
+    line,
+  );
+}
+
+/// Inserts [insertion] into [text] at [selection] - replacing the current
+/// selection if it isn't collapsed, matching how a normal paste behaves.
+/// The cursor lands right after the inserted text. The core logic behind
+/// the toolbar's Paste tool (see NoteBodyEditorState.pasteAtCursor, which
+/// reads the clipboard; this only computes the resulting text/cursor).
+TextEditingValue insertTextAt({
+  required String text,
+  required TextSelection selection,
+  required String insertion,
+}) {
+  final newText = text.replaceRange(selection.start, selection.end, insertion);
+  return TextEditingValue(
+    text: newText,
+    selection: TextSelection.collapsed(
+      offset: selection.start + insertion.length,
+    ),
+  );
+}
+
 /// Removes a just-emptied list marker entirely, leaving a blank line where
 /// the item was - built from [oldText], discarding the Enter keypress
 /// entirely, rather than from the already-"\n"-inserted new text, which
@@ -626,13 +690,18 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
   late final TextEditingController _editController;
   final FocusNode _editFocusNode = FocusNode();
 
-  // Snapshots taken just before a structural checklist action (delete,
-  // reorder, indent/un-indent, check/uncheck) - see _pushUndoSnapshot.
+  // Snapshots taken just before a structural action (checklist delete/
+  // reorder/indent/check-uncheck, or Cut line) - see _pushUndoSnapshot.
   // Deliberately NOT pushed for plain text typing, which already has its
-  // own undo via the keyboard/IME (a single shared TextField's worth,
-  // now that edit mode is one field over the raw body rather than one per
+  // own undo via the keyboard/IME (a single shared TextField's worth, now
+  // that edit mode is one field over the raw body rather than one per
   // item); this stack is for actions that have no other way to undo.
-  final List<List<BodyBlock>> _undoStack = [];
+  // [cursorOffset] only matters for a snapshot taken in edit mode (Cut
+  // line) - see _commitBody, which uses it to put the cursor back roughly
+  // where the action happened rather than at some arbitrary position; a
+  // view-mode-only action (everything else) just passes 0, since there's
+  // no cursor to restore there in the first place.
+  final List<({String body, int cursorOffset})> _undoStack = [];
   static const _maxUndoSteps = 50;
 
   bool get canUndo => _undoStack.isNotEmpty;
@@ -733,23 +802,50 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     });
   }
 
-  /// Captures [blocks] (the state just *before* a structural action
-  /// mutates it) - undo() restores exactly this.
-  void _pushUndoSnapshot(List<BodyBlock> blocks) {
-    _undoStack.add(List.of(blocks));
+  /// Captures the current raw body (the state just *before* a structural
+  /// action mutates it) - undo() restores exactly this. [cursorOffset] is
+  /// only meaningful for an edit-mode action (see the field doc on
+  /// [_undoStack]).
+  void _pushUndoSnapshot({int cursorOffset = 0}) {
+    _undoStack.add((body: _rawBody, cursorOffset: cursorOffset));
     if (_undoStack.length > _maxUndoSteps) {
       _undoStack.removeAt(0);
     }
   }
 
-  /// Reverts the most recent structural action (see _pushUndoSnapshot).
+  /// Reverts the most recent structural action (see _pushUndoSnapshot) -
+  /// general, not just for checklists (despite the toolbar icon's own
+  /// history/tooltip): checklist toggle/delete/drag and Cut line all push
+  /// a snapshot here, so this undoes whichever of those happened last.
   void undo() {
     if (_undoStack.isEmpty) return;
-    _commitBlocks(_undoStack.removeLast());
+    final snapshot = _undoStack.removeLast();
+    _commitBody(snapshot.body, cursorOffset: snapshot.cursorOffset);
   }
 
-  void _commitBlocks(List<BodyBlock> blocks) {
-    setState(() => _rawBody = serializeBody(blocks));
+  void _commitBlocks(List<BodyBlock> blocks) =>
+      _commitBody(serializeBody(blocks));
+
+  /// Applies [newBody] as the note's new raw body - shared by
+  /// [_commitBlocks] (a fresh checklist mutation) and [undo] (restoring a
+  /// snapshot). Also re-syncs the edit-mode TextField's own controller
+  /// when currently editing: undoing a Cut line can happen without ever
+  /// leaving edit mode (unlike every other undo-tracked action, which
+  /// only ever happens in view mode), so [_rawBody] alone isn't
+  /// necessarily what's actually on screen. [cursorOffset] places the
+  /// cursor precisely when given (undo), otherwise at the end.
+  void _commitBody(String newBody, {int? cursorOffset}) {
+    setState(() {
+      _rawBody = newBody;
+      if (_mode == _Mode.edit) {
+        _editController.value = TextEditingValue(
+          text: newBody,
+          selection: TextSelection.collapsed(
+            offset: (cursorOffset ?? newBody.length).clamp(0, newBody.length),
+          ),
+        );
+      }
+    });
     widget.onChanged(_rawBody);
   }
 
@@ -832,6 +928,54 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     widget.onChanged(_rawBody);
   }
 
+  /// Cuts the entire line the cursor is currently on (not just a
+  /// selection) to the clipboard - a no-op while not editing a specific
+  /// line, same reasoning as [moveLineUp]/[moveLineDown]. Pushes an undo
+  /// snapshot first (see [undo]), unlike the other edit-mode tools here -
+  /// cutting a whole line is destructive enough (and easy enough to hit
+  /// by accident) to be worth an explicit way back, the same reasoning
+  /// checklist delete already gets. Exposed for the toolbar's Cut line
+  /// button via `GlobalKey<NoteBodyEditorState>`.
+  void cutLine() {
+    if (_mode != _Mode.edit) return;
+    final selection = _editController.selection;
+    if (!selection.isValid) return;
+
+    final result = cutLineAt(
+      text: _editController.text,
+      cursorOffset: selection.baseOffset,
+    );
+    _pushUndoSnapshot(cursorOffset: selection.baseOffset);
+    unawaited(Clipboard.setData(ClipboardData(text: result.cutText)));
+    _commitBody(
+      result.value.text,
+      cursorOffset: result.value.selection.baseOffset,
+    );
+  }
+
+  /// Inserts the clipboard's text at the cursor, replacing any selection -
+  /// a no-op while not editing a specific line, same reasoning as
+  /// [cutLine], or if the clipboard has no text to paste. Exposed for the
+  /// toolbar's Paste button via `GlobalKey<NoteBodyEditorState>`.
+  Future<void> pasteAtCursor() async {
+    if (_mode != _Mode.edit) return;
+    final selection = _editController.selection;
+    if (!selection.isValid) return;
+
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final pasted = data?.text;
+    if (pasted == null || pasted.isEmpty || !mounted) return;
+
+    final newValue = insertTextAt(
+      text: _editController.text,
+      selection: selection,
+      insertion: pasted,
+    );
+    _rawBody = newValue.text;
+    setState(() => _editController.value = newValue);
+    widget.onChanged(_rawBody);
+  }
+
   /// Checking an item sinks it to the bottom of its own contiguous
   /// checklist run (same run boundaries drag-reorder respects - a checked
   /// item never crosses a paragraph into a separate checklist group),
@@ -842,7 +986,7 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     final blocks = parseBody(_rawBody);
     final target = blocks[index] as ChecklistBodyBlock;
     final becomingChecked = !target.checked;
-    _pushUndoSnapshot(blocks);
+    _pushUndoSnapshot();
 
     final toggled = ChecklistBodyBlock(
       checked: becomingChecked,
@@ -887,7 +1031,7 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     // (here or in another markdown-aware tool) still renders as a checkbox
     // instead of a plain line.
     unawaited(Clipboard.setData(ClipboardData(text: serializeBody([target]))));
-    _pushUndoSnapshot(blocks);
+    _pushUndoSnapshot();
     blocks.removeAt(index);
     _mergeAdjacentTextBlocksAround(blocks, index);
     _fixOrphanedIndents(blocks);
@@ -909,7 +1053,7 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     // drag that starts and ends without crossing any threshold shouldn't
     // clutter the undo stack with a no-op entry.
     if (fromIndex != toIndex || newIndent != target.indent) {
-      _pushUndoSnapshot(blocks);
+      _pushUndoSnapshot();
     }
 
     if (fromIndex != toIndex) {

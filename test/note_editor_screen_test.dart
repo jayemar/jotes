@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
 import 'package:jotes/models/repeat_rule.dart';
+import 'package:jotes/providers/note_toolbar_provider.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/note_editor_screen.dart';
+import 'package:jotes/screens/note_toolbar_settings_screen.dart';
 import 'package:jotes/widgets/note_body_editor.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   _mainWidgetTests();
@@ -68,7 +71,30 @@ class _RecordingNotesNotifier extends NotesNotifier {
   }
 }
 
+/// Casts to reach the mutable view double flutter_test provides -
+/// WidgetTester.view does the same cast, but that's only reachable once a
+/// testWidgets body has a tester in hand, and this needs to run in
+/// setUp/tearDown too (see below).
+TestFlutterView _testView() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  return binding.platformDispatcher.implicitView!;
+}
+
 void _mainWidgetTests() {
+  setUp(() {
+    // The bottom toolbar is now only shown while a software keyboard is up
+    // (see NoteEditorScreenState.build's showToolbar) - almost every test in
+    // this file exercises the body editor mid-edit and expects the toolbar
+    // to be there, and there's no real IME in a widget test to drive that
+    // signal on its own. Simulating one being up by default here matches
+    // this suite's pre-existing behavior; the 'toolbar visibility follows
+    // the on-screen keyboard' group below overrides this to test the gating
+    // itself.
+    _testView().viewInsets = const FakeViewPadding(bottom: 300);
+  });
+
+  tearDown(_testView().resetViewInsets);
+
   testWidgets('tapping the blank space below the body text focuses it and '
       'places the cursor at the end', (tester) async {
     final note = _existingNote(body: 'One line');
@@ -410,26 +436,38 @@ void _mainWidgetTests() {
     },
   );
 
-  testWidgets('the toolbar has a three-dot menu on the far right that reveals '
-      '"Export as Markdown", rather than a direct icon button for it', (
-    tester,
-  ) async {
-    final note = _existingNote(body: 'plain text');
-    await tester.pumpWidget(
-      ProviderScope(
-        child: MaterialApp(home: NoteEditorScreen(existing: note)),
-      ),
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    'the three-dot menu lives in the top app bar, to the right of the '
+    'reminder pill, and reveals "Export as Markdown" rather than a '
+    'direct icon button for it',
+    (tester) async {
+      final note = _existingNote(body: 'plain text');
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.byIcon(Icons.ios_share_outlined), findsNothing);
-    expect(find.byKey(const Key('note_more_menu')), findsOneWidget);
+      expect(find.byIcon(Icons.ios_share_outlined), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.byKey(const Key('note_more_menu')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.getCenter(find.byKey(const Key('note_more_menu'))).dx,
+        greaterThan(tester.getCenter(find.byTooltip('Set reminder')).dx),
+      );
 
-    await tester.tap(find.byKey(const Key('note_more_menu')));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Export as Markdown'), findsOneWidget);
-  });
+      expect(find.text('Export as Markdown'), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'the three-dot menu also offers Share, Duplicate, and Delete for an '
@@ -605,6 +643,197 @@ void _mainWidgetTests() {
       );
     },
   );
+
+  group('bottom toolbar (see NoteToolbarTool)', () {
+    testWidgets(
+      'shows Cut line and Paste alongside the original tools by default',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final note = _existingNote(body: 'plain text');
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byIcon(Icons.content_cut), findsOneWidget);
+        expect(find.byIcon(Icons.content_paste), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'the overflow menu offers "Customize toolbar", which opens '
+      'NoteToolbarSettingsScreen',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final note = _existingNote(body: 'plain text');
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('note_more_menu')));
+        await tester.pumpAndSettle();
+        expect(find.text('Customize toolbar'), findsOneWidget);
+
+        await tester.tap(find.text('Customize toolbar'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(NoteToolbarSettingsScreen), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'hiding a tool (via noteToolbarProvider) removes its icon from the '
+      'editor, without needing to leave and reopen the note',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final note = _existingNote(body: 'plain text');
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byIcon(Icons.content_paste), findsOneWidget);
+
+        await container
+            .read(noteToolbarProvider.notifier)
+            .setHidden(NoteToolbarTool.paste, true);
+        await tester.pumpAndSettle();
+
+        expect(find.byIcon(Icons.content_paste), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'reordering tools (via noteToolbarProvider) changes their '
+      'left-to-right order in the editor',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final note = _existingNote(body: 'plain text');
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final beforeX = tester
+            .getCenter(find.byKey(const Key('note_toolbar_undo')))
+            .dx;
+        final checklistX = tester
+            .getCenter(find.byKey(const Key('note_toolbar_checklist')))
+            .dx;
+        expect(beforeX, greaterThan(checklistX)); // undo starts last
+
+        await container.read(noteToolbarProvider.notifier).setOrder([
+          NoteToolbarTool.undo,
+          ...NoteToolbarTool.values.where((t) => t != NoteToolbarTool.undo),
+        ]);
+        await tester.pumpAndSettle();
+
+        final afterX = tester
+            .getCenter(find.byKey(const Key('note_toolbar_undo')))
+            .dx;
+        final afterChecklistX = tester
+            .getCenter(find.byKey(const Key('note_toolbar_checklist')))
+            .dx;
+        expect(afterX, lessThan(afterChecklistX)); // now undo starts first
+      },
+    );
+
+    testWidgets(
+      'the toolbar\'s own separator/background spans the full screen '
+      'width, not just the width of however many tools happen to be '
+      'visible - regression test for the horizontally-scrollable Row '
+      'shrinking its container to fit only its own content',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final note = _existingNote(body: 'plain text');
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Hide all but one tool - if the container only sized itself to
+        // the scrollable Row's own (now much narrower) content, this
+        // would make the regression obvious rather than borderline.
+        final notifier = container.read(noteToolbarProvider.notifier);
+        for (final tool in NoteToolbarTool.values) {
+          if (tool != NoteToolbarTool.undo) {
+            await notifier.setHidden(tool, true);
+          }
+        }
+        await tester.pumpAndSettle();
+
+        final screenWidth = tester.view.physicalSize.width /
+            tester.view.devicePixelRatio;
+        final containerWidth = tester
+            .getSize(find.byKey(const Key('note_toolbar_container')))
+            .width;
+        expect(containerWidth, screenWidth);
+      },
+    );
+
+    testWidgets(
+      'is hidden while no on-screen keyboard is up, so it isn\'t sitting '
+      'there uselessly whenever the note is just being viewed rather than '
+      'actively edited',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        tester.view.resetViewInsets(); // no keyboard, unlike this file's
+        // default (see the top-level setUp) simulating one being up
+        final note = _existingNote(body: 'plain text');
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('note_toolbar_container')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'reappears the moment the on-screen keyboard comes up',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        tester.view.resetViewInsets();
+        final note = _existingNote(body: 'plain text');
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('note_toolbar_container')), findsNothing);
+
+        tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('note_toolbar_container')),
+          findsOneWidget,
+        );
+      },
+    );
+  });
 
   testWidgets(
     'Duplicate and Delete are offered right away for a brand-new, '

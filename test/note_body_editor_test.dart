@@ -645,6 +645,100 @@ void main() {
     });
   });
 
+  group('cutLineAt', () {
+    test('removes the current line along with its own trailing newline, '
+        'closing the gap with the line below', () {
+      const text = 'First\nSecond\nThird';
+      final result = cutLineAt(
+        text: text,
+        cursorOffset: text.indexOf('Second'),
+      );
+      expect(result.value.text, 'First\nThird');
+      expect(result.cutText, 'Second');
+    });
+
+    test('cutting the last line removes the preceding newline instead, so '
+        'no blank line is left dangling at the end', () {
+      const text = 'First\nSecond\nThird';
+      final result = cutLineAt(
+        text: text,
+        cursorOffset: text.indexOf('Third'),
+      );
+      expect(result.value.text, 'First\nSecond');
+      expect(result.cutText, 'Third');
+    });
+
+    test('cutting the only line in the note leaves it empty', () {
+      const text = 'Only line';
+      final result = cutLineAt(text: text, cursorOffset: 3);
+      expect(result.value.text, '');
+      expect(result.cutText, 'Only line');
+    });
+
+    test('the returned cutText is the full raw line, list marker included, '
+        'so pasting it elsewhere still renders as a checklist item', () {
+      const text = '- [x] Buy milk\nPlain line';
+      final result = cutLineAt(text: text, cursorOffset: 0);
+      expect(result.cutText, '- [x] Buy milk');
+      expect(result.value.text, 'Plain line');
+    });
+
+    test('the cursor lands at the start of whatever line now occupies '
+        'that position', () {
+      const text = 'First\nSecond\nThird';
+      final result = cutLineAt(
+        text: text,
+        cursorOffset: text.indexOf('Second') + 3,
+      );
+      expect(result.value.selection.baseOffset, result.value.text.indexOf('Third'));
+    });
+  });
+
+  group('insertTextAt', () {
+    test('inserts at a collapsed cursor, without touching the rest of the '
+        'text', () {
+      const text = 'Hello world';
+      final result = insertTextAt(
+        text: text,
+        selection: const TextSelection.collapsed(offset: 5),
+        insertion: ' there',
+      );
+      expect(result.text, 'Hello there world');
+    });
+
+    test('replaces an active selection rather than inserting alongside it', () {
+      const text = 'Hello world';
+      final result = insertTextAt(
+        text: text,
+        selection: const TextSelection(baseOffset: 6, extentOffset: 11),
+        insertion: 'jotes',
+      );
+      expect(result.text, 'Hello jotes');
+    });
+
+    test('the cursor lands right after the inserted text', () {
+      const text = 'Hello world';
+      final result = insertTextAt(
+        text: text,
+        selection: const TextSelection.collapsed(offset: 5),
+        insertion: ' there',
+      );
+      expect(result.selection, const TextSelection.collapsed(offset: 11));
+    });
+
+    test('inserting multi-line text is a plain string splice, not special-'
+        'cased list-marker handling - that only applies to typed Enter '
+        'keypresses (see applyEnterOnChecklistLine)', () {
+      const text = 'Before\nAfter';
+      final result = insertTextAt(
+        text: text,
+        selection: const TextSelection.collapsed(offset: 6),
+        insertion: '\n- [ ] pasted item',
+      );
+      expect(result.text, 'Before\n- [ ] pasted item\nAfter');
+    });
+  });
+
   group('NoteBodyEditor widget', () {
     Future<String> pumpEditor(
       WidgetTester tester, {
@@ -1218,6 +1312,286 @@ void main() {
         expect(key.currentState!.isEditingBody, isFalse);
       },
     );
+
+    group('cutLine', () {
+      testWidgets(
+        'removes the currently-edited line and copies it to the clipboard',
+        (tester) async {
+          final clipboardCalls = <MethodCall>[];
+          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            (call) async {
+              if (call.method == 'Clipboard.setData') clipboardCalls.add(call);
+              return null;
+            },
+          );
+          addTearDown(
+            () =>
+                tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+                  SystemChannels.platform,
+                  null,
+                ),
+          );
+
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: 'First\nSecond\nThird',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          key.currentState!.focusBody();
+          await tester.pumpAndSettle();
+          final controller = tester
+              .widget<TextField>(find.byType(TextField))
+              .controller!;
+          controller.selection = TextSelection.collapsed(
+            offset: 'First\n'.length,
+          );
+          await tester.pumpAndSettle();
+
+          key.currentState!.cutLine();
+          await tester.pumpAndSettle();
+
+          expect(latest, 'First\nThird');
+          expect(clipboardCalls, hasLength(1));
+          expect(
+            (clipboardCalls.single.arguments as Map)['text'],
+            'Second',
+          );
+        },
+      );
+
+      testWidgets(
+        'is a no-op while not currently editing - there is no "current '
+        'line" without an active cursor',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: 'First\nSecond',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          key.currentState!.cutLine();
+          await tester.pumpAndSettle();
+
+          expect(latest, isEmpty);
+        },
+      );
+
+      testWidgets(
+        'pushes an undo snapshot, so undo() (the same general undo used '
+        'for checklist changes - see NoteToolbarTool.undo) restores the '
+        'cut line, cursor and all, without leaving edit mode',
+        (tester) async {
+          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            (call) async => null,
+          );
+          addTearDown(
+            () =>
+                tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+                  SystemChannels.platform,
+                  null,
+                ),
+          );
+
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: 'First\nSecond\nThird',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          key.currentState!.focusBody();
+          await tester.pumpAndSettle();
+          final controller = tester
+              .widget<TextField>(find.byType(TextField))
+              .controller!;
+          final cursorBeforeCut = 'First\n'.length;
+          controller.selection = TextSelection.collapsed(
+            offset: cursorBeforeCut,
+          );
+          await tester.pumpAndSettle();
+
+          expect(key.currentState!.canUndo, isFalse);
+          key.currentState!.cutLine();
+          await tester.pumpAndSettle();
+          expect(latest, 'First\nThird');
+          expect(key.currentState!.canUndo, isTrue);
+
+          key.currentState!.undo();
+          await tester.pumpAndSettle();
+
+          expect(latest, 'First\nSecond\nThird');
+          // Still in edit mode, with the TextField's own controller
+          // reflecting the restored text and cursor - not just
+          // NoteBodyEditor.onChanged's own latest value.
+          expect(key.currentState!.isEditingBody, isTrue);
+          expect(controller.text, 'First\nSecond\nThird');
+          expect(
+            controller.selection,
+            TextSelection.collapsed(offset: cursorBeforeCut),
+          );
+        },
+      );
+    });
+
+    group('pasteAtCursor', () {
+      Future<void> mockClipboardText(WidgetTester tester, String? text) async {
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          (call) async {
+            if (call.method == 'Clipboard.getData') {
+              return text == null ? null : {'text': text};
+            }
+            return null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+      }
+
+      testWidgets('inserts the clipboard\'s text at the cursor', (
+        tester,
+      ) async {
+        await mockClipboardText(tester, 'pasted text');
+
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Before After',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+        final controller = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        controller.selection = TextSelection.collapsed(
+          offset: 'Before'.length,
+        );
+        await tester.pumpAndSettle();
+
+        await key.currentState!.pasteAtCursor();
+        await tester.pumpAndSettle();
+
+        expect(latest, 'Beforepasted text After');
+      });
+
+      testWidgets(
+        'is a no-op while not currently editing - there is no cursor to '
+        'insert at',
+        (tester) async {
+          await mockClipboardText(tester, 'pasted text');
+
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: 'Some text',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await key.currentState!.pasteAtCursor();
+          await tester.pumpAndSettle();
+
+          expect(latest, isEmpty);
+        },
+      );
+
+      testWidgets('does nothing if the clipboard has no text to paste', (
+        tester,
+      ) async {
+        await mockClipboardText(tester, null);
+
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Some text',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+
+        await key.currentState!.pasteAtCursor();
+        await tester.pumpAndSettle();
+
+        expect(latest, isEmpty);
+      });
+    });
 
     testWidgets(
       'onModeChanged fires when entering and leaving edit mode, so a '

@@ -2,17 +2,20 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../models/note.dart';
 import '../models/repeat_rule.dart';
+import '../providers/note_toolbar_provider.dart';
 import '../providers/notes_provider.dart';
 import '../services/markdown_export_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_body_editor.dart';
+import 'note_toolbar_settings_screen.dart';
 import 'reminder_edit_screen.dart';
 
 const _uuid = Uuid();
@@ -349,6 +352,18 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     await _save();
   }
 
+  /// Opens the global (not per-note) toolbar order/visibility preferences
+  /// - see NoteToolbarSettingsScreen. Nothing to apply on return: the
+  /// bottom toolbar below already rebuilds on its own from
+  /// noteToolbarProvider, the same live-updating a Riverpod watch always
+  /// gives for free.
+  Future<void> _openToolbarSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const NoteToolbarSettingsScreen()),
+    );
+  }
+
   /// Exports the note's current in-progress state (not just its last-saved
   /// version), so exporting works even before the note has ever been
   /// saved.
@@ -493,6 +508,20 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     // ten different hues (see kNoteColors/kNoteColorsDark in note.dart) that
     // a single derived tint couldn't reliably stay legible against.
     final linkColor = isDark ? Colors.lightBlueAccent : Colors.blue;
+    // Drives the bottom toolbar's own order/visibility - see
+    // NoteToolbarSettingsScreen. Watched (not read) so toggling a tool
+    // there is reflected here the moment this screen is next visible,
+    // without needing to pop back through it explicitly.
+    final toolbarState = ref.watch(noteToolbarProvider);
+    // The toolbar only makes sense while there's a software keyboard to
+    // type into - on mobile it's shown exactly when one is, so it isn't
+    // sitting there uselessly (and eating screen space) whenever the note
+    // is just being viewed/scrolled rather than actively edited. There's no
+    // reliable on-screen-keyboard signal on the web (a desktop browser's
+    // viewInsets.bottom never reflects one), so it stays always-shown there,
+    // same as before this became conditional.
+    final keyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+    final showToolbar = kIsWeb || keyboardVisible;
 
     // Live "follow along on another device" - see _maybeApplyRemoteUpdate.
     // Watched here (not just from NotesScreen) so an update to this note
@@ -544,7 +573,100 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
               iconColor: textColor,
               onPressed: _openReminderEditor,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
+            // Far right, after the reminder pill - was in the bottom
+            // toolbar, but that row is for text-editing tools specifically
+            // (see NoteToolbarTool), not whole-note actions like this menu.
+            Builder(
+              builder: (menuButtonContext) => PopupMenuButton<String>(
+                key: const Key('note_more_menu'),
+                icon: Icon(Icons.more_vert, color: textColor),
+                tooltip: 'More options',
+                onSelected: (value) {
+                  switch (value) {
+                    case 'pin':
+                      _togglePinned();
+                    case 'color':
+                      _pickColor(menuButtonContext);
+                    case 'export':
+                      _exportToMarkdown();
+                    case 'share':
+                      _shareNote();
+                    case 'duplicate':
+                      _duplicateNote();
+                    case 'toolbar':
+                      _openToolbarSettings();
+                    case 'delete':
+                      _deleteNote();
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'pin',
+                    child: ListTile(
+                      leading: Icon(
+                        _pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                      ),
+                      title: Text(_pinned ? 'Unpin' : 'Pin'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'color',
+                    child: ListTile(
+                      leading: Icon(Icons.palette_outlined),
+                      title: Text('Change color'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'export',
+                    child: ListTile(
+                      leading: Icon(Icons.ios_share_outlined),
+                      title: Text('Export as Markdown'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'share',
+                    child: ListTile(
+                      leading: Icon(Icons.share_outlined),
+                      title: Text('Share'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  // Offered right away, even for a brand-new note that
+                  // hasn't autosaved yet - _duplicateNote/_deleteNote
+                  // persist it immediately via _ensurePersisted rather
+                  // than requiring widget.existing != null first.
+                  const PopupMenuItem(
+                    value: 'duplicate',
+                    child: ListTile(
+                      leading: Icon(Icons.copy_outlined),
+                      title: Text('Duplicate'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'toolbar',
+                    child: ListTile(
+                      leading: Icon(Icons.build_outlined),
+                      title: Text('Customize toolbar'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      leading: Icon(Icons.delete_outline),
+                      title: Text('Delete'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
         body: Column(
@@ -600,151 +722,81 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                 ),
               ),
             ),
-            SafeArea(
-              top: false,
-              // On a device with an on-screen nav bar, this row otherwise
-              // sits flush against it with no margin, the same class of
-              // problem seen in the drawer's pinned bottom section.
-              minimum: const EdgeInsets.only(bottom: 8),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: bgColor,
-                  border: const Border(top: BorderSide(color: Colors.black12)),
-                ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: Icon(Icons.check_box_outlined, color: textColor),
-                      onPressed: () =>
-                          _bodyEditorKey.currentState?.toggleChecklistLine(),
-                      tooltip: 'Toggle checklist item',
+            if (showToolbar)
+              SafeArea(
+                top: false,
+                // On a device with an on-screen nav bar, this row otherwise
+                // sits flush against it with no margin, the same class of
+                // problem seen in the drawer's pinned bottom section.
+                minimum: const EdgeInsets.only(bottom: 8),
+                child: Container(
+                  key: const Key('note_toolbar_container'),
+                  // Without this, the Container shrinks to whatever width
+                  // the scrollable Row's own content needs (e.g. just a
+                  // couple of tools, if most are hidden), so the separator
+                  // border below would stop short of the screen's edge
+                  // instead of spanning it - same reasoning SizedBox.expand
+                  // gets elsewhere in this app for a GestureDetector's hit
+                  // area (see note_body_view.dart), just for width here.
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: bgColor,
+                    border: const Border(
+                      top: BorderSide(color: Colors.black12),
                     ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.format_list_bulleted_outlined,
-                        color: textColor,
-                      ),
-                      onPressed: () =>
-                          _bodyEditorKey.currentState?.toggleBulletLine(),
-                      tooltip: 'Toggle list item',
+                  ),
+                  // Horizontally scrollable - the tool count is user-
+                  // configurable (see NoteToolbarSettingsScreen), so this
+                  // must not assume they always fit a narrow screen.
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final tool in toolbarState.visibleInOrder)
+                          _toolButton(tool, textColor),
+                      ],
                     ),
-                    IconButton(
-                      icon: Icon(Icons.arrow_upward_outlined, color: textColor),
-                      onPressed:
-                          _bodyEditorKey.currentState?.isEditingBody == true
-                          ? () => _bodyEditorKey.currentState?.moveLineUp()
-                          : null,
-                      tooltip: 'Move line up',
-                    ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.arrow_downward_outlined,
-                        color: textColor,
-                      ),
-                      onPressed:
-                          _bodyEditorKey.currentState?.isEditingBody == true
-                          ? () => _bodyEditorKey.currentState?.moveLineDown()
-                          : null,
-                      tooltip: 'Move line down',
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.undo, color: textColor),
-                      onPressed: _bodyEditorKey.currentState?.canUndo == true
-                          ? () => _bodyEditorKey.currentState?.undo()
-                          : null,
-                      tooltip: 'Undo last checklist change',
-                    ),
-                    const Spacer(),
-                    Builder(
-                      builder: (menuButtonContext) => PopupMenuButton<String>(
-                        key: const Key('note_more_menu'),
-                        icon: Icon(Icons.more_vert, color: textColor),
-                        tooltip: 'More options',
-                        onSelected: (value) {
-                          switch (value) {
-                            case 'pin':
-                              _togglePinned();
-                            case 'color':
-                              _pickColor(menuButtonContext);
-                            case 'export':
-                              _exportToMarkdown();
-                            case 'share':
-                              _shareNote();
-                            case 'duplicate':
-                              _duplicateNote();
-                            case 'delete':
-                              _deleteNote();
-                          }
-                        },
-                        itemBuilder: (context) => [
-                          PopupMenuItem(
-                            value: 'pin',
-                            child: ListTile(
-                              leading: Icon(
-                                _pinned
-                                    ? Icons.push_pin
-                                    : Icons.push_pin_outlined,
-                              ),
-                              title: Text(_pinned ? 'Unpin' : 'Pin'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'color',
-                            child: ListTile(
-                              leading: Icon(Icons.palette_outlined),
-                              title: Text('Change color'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'export',
-                            child: ListTile(
-                              leading: Icon(Icons.ios_share_outlined),
-                              title: Text('Export as Markdown'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'share',
-                            child: ListTile(
-                              leading: Icon(Icons.share_outlined),
-                              title: Text('Share'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          // Offered right away, even for a brand-new note
-                          // that hasn't autosaved yet - _duplicateNote/
-                          // _deleteNote persist it immediately via
-                          // _ensurePersisted rather than requiring
-                          // widget.existing != null first.
-                          const PopupMenuItem(
-                            value: 'duplicate',
-                            child: ListTile(
-                              leading: Icon(Icons.copy_outlined),
-                              title: Text('Duplicate'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuDivider(),
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: ListTile(
-                              leading: Icon(Icons.delete_outline),
-                              title: Text('Delete'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
+    );
+  }
+
+  /// Builds one bottom-toolbar icon button for [tool] - which
+  /// NoteBodyEditorState method it calls and whether it's currently
+  /// enabled both follow directly from [tool] itself; only moveUp/
+  /// moveDown/cutLine/paste/undo can be disabled (each needs an active
+  /// cursor, or - for undo - something to actually undo), matching
+  /// exactly how these tools already behaved before becoming
+  /// user-reorderable/hideable (see NoteToolbarTool).
+  Widget _toolButton(NoteToolbarTool tool, Color textColor) {
+    final isEditing = _bodyEditorKey.currentState?.isEditingBody == true;
+    final VoidCallback? onPressed = switch (tool) {
+      NoteToolbarTool.checklist =>
+        () => _bodyEditorKey.currentState?.toggleChecklistLine(),
+      NoteToolbarTool.bullet =>
+        () => _bodyEditorKey.currentState?.toggleBulletLine(),
+      NoteToolbarTool.moveUp =>
+        isEditing ? () => _bodyEditorKey.currentState?.moveLineUp() : null,
+      NoteToolbarTool.moveDown =>
+        isEditing ? () => _bodyEditorKey.currentState?.moveLineDown() : null,
+      NoteToolbarTool.cutLine =>
+        isEditing ? () => _bodyEditorKey.currentState?.cutLine() : null,
+      NoteToolbarTool.paste =>
+        isEditing ? () => _bodyEditorKey.currentState?.pasteAtCursor() : null,
+      NoteToolbarTool.undo =>
+        _bodyEditorKey.currentState?.canUndo == true
+            ? () => _bodyEditorKey.currentState?.undo()
+            : null,
+    };
+    return IconButton(
+      key: Key('note_toolbar_${tool.name}'),
+      icon: noteToolbarIcon(tool, color: textColor),
+      onPressed: onPressed,
+      tooltip: tool.label,
     );
   }
 }
