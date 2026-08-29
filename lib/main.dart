@@ -57,20 +57,24 @@ String? noteIdFromWidgetUri(Uri? uri) {
 /// PeriodicRefreshWorker (Kotlin) does the same on a recurring WorkManager
 /// schedule (roughly every 15 minutes, the shortest interval Android's
 /// WorkManager allows for periodic work), passing `--periodic-refresh` -
-/// covers two gaps a sync/push/boot-triggered refresh alone leaves: the
+/// covers gaps a sync/push/boot-triggered refresh alone leaves: the
 /// widget's upcoming/overdue split is only ever recomputed when something
 /// pushes fresh data to it, so a reminder can sit displayed as "upcoming"
 /// well past its own fire time until the next unrelated sync happens to
-/// touch it; and restoreUnresolvedReminders() only ever runs once at
-/// startup, so a reminder that fires normally but then gets cleared from
-/// the notification shade some other way than tapping its own
+/// touch it; restoreUnresolvedReminders() only otherwise runs at startup
+/// and on push, so a reminder that fires normally but then gets cleared
+/// from the notification shade some other way than tapping its own
 /// Dismiss/Snooze action (a swipe, "Clear all", the shade being wiped by a
-/// reboot) stays silently gone until the next app open. Deliberately
-/// local-only (no PbService/mergeSync call) - both gaps are about
-/// re-deriving state from what's already on this device against the
-/// current time, not about fetching anything new from the server; actual
-/// cross-device changes already have their own push path (see
-/// UnifiedPushService).
+/// reboot) would otherwise stay silently gone until the next app open; and
+/// a real mergeSync catches this device up on whatever changed elsewhere
+/// even when the push path that's supposed to deliver it promptly (see
+/// UnifiedPushService) didn't - e.g. a Dismiss on another device cancelling
+/// this device's own still-showing tray notification for the same
+/// now-resolved reminder, which otherwise would have sat there until this
+/// device's app was next opened. mergeSync itself is best-effort (wrapped
+/// below) - offline is common for a periodic background task, and the
+/// purely local re-derivation this already did before must keep happening
+/// regardless of whether the network happens to be up right now.
 ///
 /// [backgroundSyncCallbackDispatcher] is a separate, WorkManager-driven
 /// headless trigger (not gated on an `args` flag, since Workmanager's own
@@ -111,6 +115,13 @@ void main(List<String> args) async {
 
   if (args.contains('--periodic-refresh')) {
     await NotificationService.instance.initialize(requestPermissions: false);
+    await PbService.instance.restore();
+    try {
+      await mergeSync();
+    } catch (_) {
+      // Best-effort - see this branch's own doc comment above. The local
+      // re-derivation below must still run whether or not this succeeded.
+    }
     await NotificationService.instance.restoreUnresolvedReminders();
     await WidgetService.instance.syncAll(await DbService.instance.getAll());
     return;

@@ -6,13 +6,18 @@ import 'widget_service.dart';
 
 /// One-time reconciliation between local and remote storage: newer-wins by
 /// `updated` timestamp in either direction, and anything local-only gets
-/// pushed up. Used both by the live app on connect/reconnect (see
-/// SyncNotifier in sync_provider.dart, which also refreshes Riverpod state
-/// afterward) and by [UnifiedPushService]'s background message handler,
-/// which has no widget tree / ProviderContainer to route through - a push
-/// notification only carries a lightweight "something changed" hint (see
-/// backend/push.go), not the changed data itself, so reacting to one always
-/// means doing this same full reconciliation rather than a targeted update.
+/// pushed up. Used by the live app on connect/reconnect (see SyncNotifier
+/// in sync_provider.dart, which also refreshes Riverpod state afterward),
+/// by [UnifiedPushService]'s background message handler (which has no
+/// widget tree / ProviderContainer to route through - a push notification
+/// only carries a lightweight "something changed" hint, see backend/push.go,
+/// not the changed data itself, so reacting to one always means doing this
+/// same full reconciliation rather than a targeted update), and by
+/// main.dart's `--periodic-refresh` headless entrypoint (best-effort there,
+/// specifically so a device whose push delivery isn't working reliably -
+/// e.g. no UnifiedPush distributor installed - still catches up on
+/// cross-device changes, like another device's Dismiss, within one
+/// ~15-minute cycle instead of only on next app open).
 Future<void> mergeSync() async {
   if (!PbService.instance.isLoggedIn) return;
   await PbService.instance.refreshAuth();

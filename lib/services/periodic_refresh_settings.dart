@@ -7,10 +7,13 @@ const _enabledPrefsKey = 'periodic_refresh_enabled';
 
 /// Whether the periodic (~15 minute) background refresh is enabled - see
 /// PeriodicRefreshWorker.kt and main.dart's --periodic-refresh branch for
-/// what it actually does (re-deriving the widget's upcoming/overdue state
-/// against the current time, and re-posting an overdue reminder that's no
-/// longer showing in the notification shade). Defaults to on, matching the
-/// behavior before this became configurable.
+/// what it actually does: a best-effort mergeSync with the server (so a
+/// change made on another device, e.g. a Dismiss, is picked up even if
+/// push delivery isn't working), then re-deriving the widget's
+/// upcoming/overdue state against the current time and re-posting an
+/// overdue reminder that's no longer showing in the notification shade,
+/// both of which happen regardless of whether the sync above succeeded.
+/// Defaults to on, matching the behavior before this became configurable.
 ///
 /// The actual WorkManager schedule lives entirely on the native side (see
 /// MainActivity.kt) - this class only owns the persisted on/off choice and
