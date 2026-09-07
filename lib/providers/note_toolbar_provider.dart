@@ -17,7 +17,8 @@ enum NoteToolbarTool {
   moveDown(Icons.arrow_downward_outlined, 'Move line down'),
   cutLine(Icons.content_cut, 'Cut line'),
   paste(Icons.content_paste, 'Paste'),
-  undo(Icons.undo, 'Undo');
+  undo(Icons.undo, 'Undo'),
+  insertNoteLink(Icons.link, 'Insert note link');
 
   const NoteToolbarTool(this.icon, this.label);
 

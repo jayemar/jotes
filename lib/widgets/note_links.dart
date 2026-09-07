@@ -31,6 +31,19 @@ class LinkSegment {
   bool get isLink => url != null;
 }
 
+// A URI scheme prefix ("https:", "mailto:", "tel:", ...) marks a link
+// target as external, handled by LinkService as always; anything else (no
+// scheme at all, e.g. a bare note id) is assumed to be a same-app note
+// reference by default - see isInternalLinkTarget.
+final RegExp _uriSchemePattern = RegExp(r'^[a-zA-Z][a-zA-Z0-9+.\-]*:');
+
+/// Whether [url] (a link target from a `[label](url)` markdown link) should
+/// be resolved as a reference to another note in this app, rather than
+/// opened externally via LinkService - true for anything without a URI
+/// scheme (see [_uriSchemePattern]), which in practice means a note's own
+/// id, since nothing else currently produces a scheme-less link target.
+bool isInternalLinkTarget(String url) => !_uriSchemePattern.hasMatch(url);
+
 /// Splits [text] into plain-text and link segments - `[label](url)`
 /// markdown links first, then bare `http(s)://` URLs in whatever plain text
 /// is left over (so a URL already inside a markdown link's own parens is

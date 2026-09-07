@@ -110,6 +110,9 @@ void main() {
         NoteToolbarTool.bullet,
         NoteToolbarTool.moveUp,
         NoteToolbarTool.moveDown,
+        // Not part of the persisted order above - appended automatically
+        // (see _resolveOrder) as a tool that postdates it.
+        NoteToolbarTool.insertNoteLink,
       ]);
       expect(state.hidden, {NoteToolbarTool.moveDown});
     });

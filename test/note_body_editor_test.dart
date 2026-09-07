@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jotes/models/note.dart';
 import 'package:jotes/services/link_service.dart';
 import 'package:jotes/widgets/note_body_editor.dart';
 
@@ -309,6 +310,85 @@ void main() {
       );
 
       expect(result, isNull);
+    });
+  });
+
+  group('detectNoteLinkTrigger', () {
+    test('typing the second [ of a [[ pair triggers, spanning both '
+        'characters', () {
+      const oldText = 'See [';
+      const newText = 'See [[';
+      final trigger = detectNoteLinkTrigger(
+        oldText: oldText,
+        newText: newText,
+        newCursorOffset: newText.length,
+      );
+
+      expect(trigger, isNotNull);
+      expect(trigger!.start, 4);
+      expect(trigger.end, 6);
+    });
+
+    test('triggers mid-text too, not just at the end', () {
+      const oldText = 'See [ over there';
+      const newText = 'See [[ over there';
+      final trigger = detectNoteLinkTrigger(
+        oldText: oldText,
+        newText: newText,
+        newCursorOffset: 6,
+      );
+
+      expect(trigger, isNotNull);
+      expect(trigger!.start, 4);
+      expect(trigger.end, 6);
+    });
+
+    test('typing a lone [ (nothing precedes it) does not trigger', () {
+      const oldText = 'See ';
+      const newText = 'See [';
+      final trigger = detectNoteLinkTrigger(
+        oldText: oldText,
+        newText: newText,
+        newCursorOffset: newText.length,
+      );
+
+      expect(trigger, isNull);
+    });
+
+    test('pasting [[ as a single multi-character change does not trigger', () {
+      const oldText = 'See ';
+      const newText = 'See [[';
+      final trigger = detectNoteLinkTrigger(
+        oldText: oldText,
+        newText: newText,
+        newCursorOffset: newText.length,
+      );
+
+      expect(trigger, isNull);
+    });
+
+    test('backspacing does not trigger', () {
+      const oldText = 'See [[';
+      const newText = 'See [';
+      final trigger = detectNoteLinkTrigger(
+        oldText: oldText,
+        newText: newText,
+        newCursorOffset: newText.length,
+      );
+
+      expect(trigger, isNull);
+    });
+
+    test('typing an unrelated character does not trigger', () {
+      const oldText = 'See [';
+      const newText = 'See [x';
+      final trigger = detectNoteLinkTrigger(
+        oldText: oldText,
+        newText: newText,
+        newCursorOffset: newText.length,
+      );
+
+      expect(trigger, isNull);
     });
   });
 
@@ -1467,6 +1547,103 @@ void main() {
             controller.selection,
             TextSelection.collapsed(offset: cursorBeforeCut),
           );
+        },
+      );
+    });
+
+    group('insertNoteLink', () {
+      final target = Note(
+        id: 'target-id',
+        title: 'Grocery List',
+        created: DateTime(2026, 1, 1),
+        updated: DateTime(2026, 1, 1),
+      );
+
+      testWidgets(
+        'inserts a markdown link at the cursor and leaves the cursor '
+        'right after it, back in edit mode even though the note-link '
+        'picker dialog (awaited by the caller before this runs) steals '
+        'focus and flips this editor to view mode first',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: 'See  for details',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          key.currentState!.focusBody();
+          await tester.pumpAndSettle();
+          final controller = tester
+              .widget<TextField>(find.byType(TextField))
+              .controller!;
+          controller.selection = const TextSelection.collapsed(offset: 4);
+          await tester.pumpAndSettle();
+
+          // Mimics what actually happens while the note-link picker's own
+          // dialog is open and focused (see NoteEditorScreen._insertNoteLink,
+          // which awaits it before calling insertNoteLink).
+          key.currentState!.exitEditMode();
+          await tester.pumpAndSettle();
+          expect(key.currentState!.isEditingBody, isFalse);
+
+          key.currentState!.insertNoteLink(target);
+          await tester.pumpAndSettle();
+
+          const expectedBody = 'See [Grocery List](target-id) for details';
+          expect(latest, expectedBody);
+          expect(key.currentState!.isEditingBody, isTrue);
+          final reboundController = tester
+              .widget<TextField>(find.byType(TextField))
+              .controller!;
+          expect(reboundController.text, expectedBody);
+          expect(
+            reboundController.selection,
+            // right after "See [Grocery List](target-id)"
+            const TextSelection.collapsed(offset: 29),
+          );
+        },
+      );
+
+      testWidgets(
+        'falls back to the end of the body when there is no meaningful '
+        'cursor position yet (e.g. the toolbar button used before ever '
+        'entering edit mode)',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: 'Some text',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          key.currentState!.insertNoteLink(target);
+          await tester.pumpAndSettle();
+
+          expect(latest, 'Some text[Grocery List](target-id)');
+          expect(key.currentState!.isEditingBody, isTrue);
         },
       );
     });

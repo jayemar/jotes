@@ -80,4 +80,20 @@ void main() {
       expect(parseLinks(''), isEmpty);
     });
   });
+
+  group('isInternalLinkTarget', () {
+    test('a bare note id (no scheme) is internal', () {
+      expect(isInternalLinkTarget('TS9x4k2p'), isTrue);
+    });
+
+    test('an http(s) URL is external', () {
+      expect(isInternalLinkTarget('https://example.com'), isFalse);
+      expect(isInternalLinkTarget('http://example.com'), isFalse);
+    });
+
+    test('a mailto/tel link is external', () {
+      expect(isInternalLinkTarget('mailto:me@example.com'), isFalse);
+      expect(isInternalLinkTarget('tel:+15551234567'), isFalse);
+    });
+  });
 }

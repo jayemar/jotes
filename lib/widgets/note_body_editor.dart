@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, TextInputFormatter;
 
+import '../models/note.dart';
 import 'note_body_view.dart';
+import 'note_link_picker.dart';
 
 // Standard GitHub-Flavored-Markdown task list syntax ("- [ ] text" /
 // "- [x] text"), so a note's body stays plain, portable Markdown rather
@@ -401,6 +403,34 @@ TextEditingValue? applyEnterOnChecklistLine({
   return null;
 }
 
+/// If the edit from [oldText] to [newText] was exactly "the user typed a
+/// second `[` completing `[[` at the cursor" (cursor now at
+/// [newCursorOffset]), returns the raw-text range that pair occupies - the
+/// trigger for popping up the note-link picker (see
+/// NoteBodyEditorState._handleNoteLinkTrigger). `[[` is only ever a
+/// trigger gesture here, never stored - a note link is always inserted as
+/// plain `[Title](id)` markdown (see [NoteBodyEditorState.insertNoteLink]).
+/// Returns null for every other edit (pasting `[[` as one multi-character
+/// change, backspacing, typing a lone `[`, editing elsewhere, etc.) -
+/// deliberately as narrow as [applyEnterOnChecklistLine]'s own single-
+/// keystroke check, for the same reason.
+({int start, int end})? detectNoteLinkTrigger({
+  required String oldText,
+  required String newText,
+  required int newCursorOffset,
+}) {
+  if (newText.length != oldText.length + 1) return null;
+  final insertedAt = newCursorOffset - 1;
+  if (insertedAt < 1 || insertedAt >= newText.length) return null;
+  if (newText[insertedAt] != '[') return null;
+  if (newText.substring(0, insertedAt) != oldText.substring(0, insertedAt) ||
+      newText.substring(newCursorOffset) != oldText.substring(insertedAt)) {
+    return null;
+  }
+  if (newText[insertedAt - 1] != '[') return null;
+  return (start: insertedAt - 1, end: newCursorOffset);
+}
+
 /// Only two levels are supported - a top-level item (0) or a sub-item (1)
 /// of the nearest preceding top-level item, matching how most checklist
 /// apps handle nesting (flat sub-items, not an arbitrarily deep outline).
@@ -649,6 +679,12 @@ class _ListContinuationFormatter extends TextInputFormatter {
 /// append a new item (e.g. from a toolbar button).
 class NoteBodyEditor extends StatefulWidget {
   final String initialBody;
+  // The note currently being edited's own id - used only to exclude it
+  // from its own note-link picker (see NoteBodyEditorState._handleNoteLinkTrigger),
+  // so a note can't accidentally link to itself. Defaults to '' (excludes
+  // nothing) so the many existing tests that don't exercise note-linking
+  // don't need to pass a real id.
+  final String noteId;
   final Color textColor;
   final Color hintColor;
   final Color linkColor;
@@ -665,6 +701,7 @@ class NoteBodyEditor extends StatefulWidget {
   const NoteBodyEditor({
     super.key,
     required this.initialBody,
+    this.noteId = '',
     required this.textColor,
     required this.hintColor,
     required this.linkColor,
@@ -783,9 +820,76 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
     // just typed via its controller; nothing else on screen depends on
     // _rawBody reactively while typing, which is the whole point of not
     // parsing on every keystroke.
+    final previous = _rawBody;
     _rawBody = value;
     widget.onChanged(_rawBody);
+
+    final trigger = detectNoteLinkTrigger(
+      oldText: previous,
+      newText: value,
+      newCursorOffset: _editController.selection.end,
+    );
+    if (trigger != null) {
+      unawaited(_handleNoteLinkTrigger(trigger.start, trigger.end));
+    }
   }
+
+  /// Pops up the note-link picker for a just-typed `[[` spanning
+  /// [start, end) in the raw body (see [detectNoteLinkTrigger]), replacing
+  /// it with `[Title](id)` for whichever note is picked - or leaving it
+  /// untouched if the picker is dismissed without one.
+  Future<void> _handleNoteLinkTrigger(int start, int end) async {
+    final note = await pickNoteToLink(context, excludeNoteId: widget.noteId);
+    if (note == null || !mounted) return;
+
+    // The picker is a modal dialog - nothing else can have edited the body
+    // while it was open - but this is cheap insurance against replacing the
+    // wrong range if that ever stops being true. Checked against _rawBody,
+    // not the edit TextField's own controller - showing the dialog steals
+    // its focus, which flips this editor to view mode (see
+    // _onEditFocusChanged) and stops the controller being kept in sync
+    // (see _commitBody), so it's _rawBody that's guaranteed current here.
+    if (end > _rawBody.length || _rawBody.substring(start, end) != '[[') {
+      return;
+    }
+    _applyNoteLink(note, TextSelection(baseOffset: start, extentOffset: end));
+  }
+
+  /// Inserts a link to [note] at the current cursor - the core logic
+  /// behind the toolbar's "Insert note link" button (see
+  /// NoteEditorScreen._insertNoteLink). Works regardless of the mode this
+  /// editor is *currently* in - showing the note-link picker's own dialog
+  /// (awaited by both this method's and [_handleNoteLinkTrigger]'s callers
+  /// before either ever runs) steals focus from this editor's TextField,
+  /// which flips it to view mode the moment the dialog opens (see
+  /// _onEditFocusChanged); [_applyNoteLink] switches back to edit mode
+  /// itself once the link is inserted, so that flip is transparent here.
+  void insertNoteLink(Note note) {
+    final selection = _editController.selection;
+    final cursor = selection.isValid
+        ? selection.start.clamp(0, _rawBody.length)
+        : _rawBody.length;
+    _applyNoteLink(note, TextSelection.collapsed(offset: cursor));
+  }
+
+  /// Shared by [insertNoteLink] and [_handleNoteLinkTrigger]: replaces
+  /// [replaceRange] of [_rawBody] with a markdown link to [note], then
+  /// (re-)enters edit mode with the cursor right after the inserted link -
+  /// exactly where a typed link would leave it, and where the user almost
+  /// certainly wants to keep typing next.
+  void _applyNoteLink(Note note, TextSelection replaceRange) {
+    final newValue = insertTextAt(
+      text: _rawBody,
+      selection: replaceRange,
+      insertion: _noteLinkMarkdown(note),
+    );
+    _rawBody = newValue.text;
+    widget.onChanged(_rawBody);
+    _enterEditMode(newValue.selection.baseOffset);
+  }
+
+  String _noteLinkMarkdown(Note note) =>
+      '[${note.title.isEmpty ? 'Untitled' : note.title}](${note.id})';
 
   /// Replaces the body with [newBody] from an external source - a note
   /// open on this device receiving a newer edit made on another device

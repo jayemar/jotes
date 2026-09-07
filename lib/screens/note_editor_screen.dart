@@ -15,6 +15,7 @@ import '../services/markdown_export_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_body_editor.dart';
+import '../widgets/note_link_picker.dart';
 import 'note_toolbar_settings_screen.dart';
 import 'reminder_edit_screen.dart';
 
@@ -700,6 +701,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                   key: _bodyEditorKey,
                   initialBody:
                       widget.existing?.body ?? widget.initialBody ?? '',
+                  noteId: _noteId,
                   textColor: textColor,
                   hintColor: hintColor,
                   linkColor: linkColor,
@@ -791,6 +793,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         _bodyEditorKey.currentState?.canUndo == true
             ? () => _bodyEditorKey.currentState?.undo()
             : null,
+      NoteToolbarTool.insertNoteLink =>
+        isEditing ? () => _insertNoteLink() : null,
     };
     return IconButton(
       key: Key('note_toolbar_${tool.name}'),
@@ -798,6 +802,16 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       onPressed: onPressed,
       tooltip: tool.label,
     );
+  }
+
+  /// Opens the note-link picker and inserts a markdown link to whatever's
+  /// picked at the body editor's current cursor - the toolbar's own
+  /// entry point into the same picker the inline `[[` trigger uses (see
+  /// note_body_editor.dart's detectNoteLinkTrigger/insertNoteLink).
+  Future<void> _insertNoteLink() async {
+    final note = await pickNoteToLink(context, excludeNoteId: _noteId);
+    if (note == null || !mounted) return;
+    _bodyEditorKey.currentState?.insertNoteLink(note);
   }
 }
 
