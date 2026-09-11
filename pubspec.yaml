@@ -14,7 +14,7 @@ publish_to: 'none'
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.16.2+63
+version: 1.17.7+79
 
 environment:
   sdk: ^3.12.2
@@ -75,6 +75,7 @@ flutter:
   # Bundled (not fetched at runtime) so font choice works fully offline.
   assets:
     - assets/google_fonts/
+    - assets/icon/notification_glyph.png
 
 flutter_launcher_icons:
   android: true

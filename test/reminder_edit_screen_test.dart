@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/repeat_rule.dart';
 import 'package:jotes/screens/reminder_edit_screen.dart';
+import 'package:jotes/services/notification_appearance_settings.dart';
+
+const _soundsChannel = MethodChannel('com.jayemar.jotes/notification_sounds');
 
 /// Pumps ReminderEditScreen pushed on top of a placeholder route (so it has
 /// somewhere to pop back to) and opens it - for tests that only need to
@@ -12,6 +16,9 @@ Future<void> _pumpAndOpen(
   WidgetTester tester, {
   DateTime? initialReminderAt,
   RepeatRule? initialRepeatRule,
+  String? initialSoundUri,
+  String? initialSoundTitle,
+  NotificationIconOption initialIcon = NotificationIconOption.defaultIcon,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -26,6 +33,9 @@ Future<void> _pumpAndOpen(
                   builder: (_) => ReminderEditScreen(
                     initialReminderAt: initialReminderAt,
                     initialRepeatRule: initialRepeatRule,
+                    initialSoundUri: initialSoundUri,
+                    initialSoundTitle: initialSoundTitle,
+                    initialIcon: initialIcon,
                   ),
                 ),
               ),
@@ -41,6 +51,14 @@ Future<void> _pumpAndOpen(
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+  tearDown(() {
+    messenger.setMockMethodCallHandler(_soundsChannel, null);
+  });
+
   group('a brand-new reminder (no initial values)', () {
     testWidgets('shows "New reminder", "Does not repeat", and no delete '
         'icon - nothing exists yet to remove', (tester) async {
@@ -409,6 +427,254 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('reminder_edit_time')), findsOneWidget);
+    });
+  });
+
+  group('the Notification sound row', () {
+    testWidgets('defaults to "Default" when no sound has been chosen', (
+      tester,
+    ) async {
+      await _pumpAndOpen(tester);
+
+      expect(
+        tester
+            .widget<ListTile>(find.byKey(const Key('reminder_edit_sound')))
+            .subtitle,
+        isA<Text>().having((t) => t.data, 'data', 'Default'),
+      );
+    });
+
+    testWidgets('shows whatever initialSoundTitle was passed in', (
+      tester,
+    ) async {
+      await _pumpAndOpen(
+        tester,
+        initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+        initialSoundUri: 'content://media/internal/audio/media/1',
+        initialSoundTitle: 'Chime',
+      );
+
+      expect(
+        tester
+            .widget<ListTile>(find.byKey(const Key('reminder_edit_sound')))
+            .subtitle,
+        isA<Text>().having((t) => t.data, 'data', 'Chime'),
+      );
+    });
+
+    testWidgets(
+      'tapping it does nothing when the native sound list is unavailable '
+      '(as in a plain test run with no mock handler registered), rather '
+      'than throwing or opening an empty menu',
+      (tester) async {
+        await _pumpAndOpen(tester);
+
+        await tester.tap(find.byKey(const Key('reminder_edit_sound')));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(PopupMenuItem<NotificationSoundOption>), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'opens a menu of the sounds the native side returns, current choice '
+      'checked, and selecting one updates the row',
+      (tester) async {
+        messenger.setMockMethodCallHandler(_soundsChannel, (call) async {
+          expect(call.method, 'listNotificationSounds');
+          return [
+            {
+              'uri': 'content://settings/system/notification_sound',
+              'title': 'Default',
+            },
+            {
+              'uri': 'content://media/internal/audio/media/1',
+              'title': 'Chime',
+            },
+          ];
+        });
+        await _pumpAndOpen(tester);
+
+        await tester.tap(find.byKey(const Key('reminder_edit_sound')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(
+            const Key(
+              'reminder_sound_option_content://settings/system/notification_sound',
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            const Key(
+              'reminder_sound_option_content://media/internal/audio/media/1',
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<ListTile>(
+                find.descendant(
+                  of: find.byKey(
+                    const Key(
+                      'reminder_sound_option_content://settings/system/notification_sound',
+                    ),
+                  ),
+                  matching: find.byType(ListTile),
+                ),
+              )
+              .trailing,
+          isNotNull,
+        );
+
+        await tester.tap(
+          find.byKey(
+            const Key(
+              'reminder_sound_option_content://media/internal/audio/media/1',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Chime'), findsOneWidget);
+      },
+    );
+  });
+
+  group('the Notification icon row', () {
+    testWidgets('defaults to "Default"', (tester) async {
+      await _pumpAndOpen(tester);
+
+      expect(
+        tester
+            .widget<ListTile>(find.byKey(const Key('reminder_edit_icon')))
+            .subtitle,
+        isA<Text>().having((t) => t.data, 'data', 'Default'),
+      );
+    });
+
+    testWidgets('shows whatever initialIcon was passed in', (tester) async {
+      await _pumpAndOpen(
+        tester,
+        initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+        initialIcon: NotificationIconOption.star,
+      );
+
+      expect(
+        tester
+            .widget<ListTile>(find.byKey(const Key('reminder_edit_icon')))
+            .subtitle,
+        isA<Text>().having((t) => t.data, 'data', 'Star'),
+      );
+    });
+
+    testWidgets(
+      'opens a menu of every icon option with a preview icon next to its '
+      'name, current choice checked, and selecting one updates the row',
+      (tester) async {
+        await _pumpAndOpen(tester);
+
+        await tester.tap(find.byKey(const Key('reminder_edit_icon')));
+        await tester.pumpAndSettle();
+
+        for (final option in NotificationIconOption.values) {
+          final optionFinder = find.byKey(
+            Key('reminder_icon_option_${option.name}'),
+          );
+          expect(optionFinder, findsOneWidget);
+          expect(
+            find.descendant(of: optionFinder, matching: find.byType(Icon)),
+            findsWidgets,
+          );
+        }
+        expect(
+          tester
+              .widget<ListTile>(
+                find.descendant(
+                  of: find.byKey(
+                    Key(
+                      'reminder_icon_option_'
+                      '${NotificationIconOption.defaultIcon.name}',
+                    ),
+                  ),
+                  matching: find.byType(ListTile),
+                ),
+              )
+              .trailing,
+          isNotNull,
+        );
+
+        await tester.tap(find.byKey(const Key('reminder_icon_option_bell')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Bell'), findsOneWidget);
+      },
+    );
+  });
+
+  group('saving carries sound/icon choices back in ReminderSet', () {
+    testWidgets('the chosen sound and icon are both included', (
+      tester,
+    ) async {
+      messenger.setMockMethodCallHandler(_soundsChannel, (call) async {
+        return [
+          {
+            'uri': 'content://media/internal/audio/media/1',
+            'title': 'Chime',
+          },
+        ];
+      });
+      ReminderEditResult? result;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: FilledButton(
+                key: const Key('open'),
+                onPressed: () async {
+                  result = await Navigator.push<ReminderEditResult>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ReminderEditScreen(),
+                    ),
+                  );
+                },
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('open')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('reminder_edit_sound')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key(
+            'reminder_sound_option_content://media/internal/audio/media/1',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('reminder_edit_icon')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reminder_icon_option_star')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('reminder_edit_save')));
+      await tester.pumpAndSettle();
+
+      expect(result, isA<ReminderSet>());
+      final set = result as ReminderSet;
+      expect(set.soundUri, 'content://media/internal/audio/media/1');
+      expect(set.soundTitle, 'Chime');
+      expect(set.icon, NotificationIconOption.star);
     });
   });
 }

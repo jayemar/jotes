@@ -3,6 +3,7 @@ package com.jayemar.jotes
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -18,6 +19,16 @@ private const val AUTOSTART_CHANNEL = "com.jayemar.jotes/autostart"
 private const val SHARE_CHANNEL = "com.jayemar.jotes/share"
 private const val PERIODIC_REFRESH_CHANNEL = "com.jayemar.jotes/periodic_refresh"
 private const val PERIODIC_REFRESH_WORK_NAME = "periodic_refresh"
+private const val NOTIFICATION_SOUNDS_CHANNEL = "com.jayemar.jotes/notification_sounds"
+// Not an OS limit - RingtoneManager can return dozens of sounds. Capped here
+// because NotificationAppearanceSettings.channelId (Dart side) mints a new,
+// permanent Android notification channel per distinct sound a user actually
+// picks (channels are immutable once created, so a shared channel can't
+// just have its sound changed in place - see that class's own doc comment),
+// and an unbounded picker would mean an unbounded, never-cleaned-up number
+// of "Reminders" entries cluttering this app's system notification
+// settings over time.
+private const val MAX_NOTIFICATION_SOUND_OPTIONS = 6
 // The shortest interval Android's WorkManager allows for periodic work -
 // anything shorter is silently clamped to this by the OS anyway. See
 // PeriodicRefreshWorker's own doc comment for what this actually refreshes.
@@ -173,6 +184,14 @@ class MainActivity : FlutterActivity() {
           }
         }
 
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NOTIFICATION_SOUNDS_CHANNEL)
+        .setMethodCallHandler { call, result ->
+          when (call.method) {
+            "listNotificationSounds" -> result.success(listNotificationSounds())
+            else -> result.notImplemented()
+          }
+        }
+
     val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
     shareChannel = channel
     channel.setMethodCallHandler { call, result ->
@@ -219,6 +238,41 @@ class MainActivity : FlutterActivity() {
     } else {
       workManager.cancelUniqueWork(PERIODIC_REFRESH_WORK_NAME)
     }
+  }
+
+  /**
+   * "Default" (this device's own configured default notification sound)
+   * first, then up to [MAX_NOTIFICATION_SOUND_OPTIONS] - 1 more of this
+   * device's own installed notification sounds, queried via
+   * [RingtoneManager] rather than bundled into the app - see
+   * NotificationAppearanceSettings' own doc comment (Dart side) for why.
+   * Best-effort: any failure querying the device's sound list still
+   * returns the "Default" entry, since that one needs no query at all.
+   */
+  private fun listNotificationSounds(): List<Map<String, String>> {
+    val sounds =
+        mutableListOf(
+            mapOf(
+                "uri" to Settings.System.DEFAULT_NOTIFICATION_URI.toString(),
+                "title" to "Default",
+            )
+        )
+    try {
+      val manager = RingtoneManager(this)
+      manager.setType(RingtoneManager.TYPE_NOTIFICATION)
+      val cursor = manager.cursor
+      while (cursor.moveToNext() && sounds.size < MAX_NOTIFICATION_SOUND_OPTIONS) {
+        val title = cursor.getString(RingtoneManager.TITLE_COLUMN_INDEX)
+        val uri =
+            "${cursor.getString(RingtoneManager.URI_COLUMN_INDEX)}/" +
+                cursor.getString(RingtoneManager.ID_COLUMN_INDEX)
+        sounds.add(mapOf("uri" to uri, "title" to title))
+      }
+    } catch (_: Exception) {
+      // Best-effort - the "Default" entry above is always returned
+      // regardless of whether the device's own sound list is queryable.
+    }
+    return sounds
   }
 
   private fun extractShare(intent: Intent?): Map<String, String>? {

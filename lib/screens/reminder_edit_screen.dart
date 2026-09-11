@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/repeat_rule.dart';
+import '../services/notification_appearance_settings.dart';
 import 'custom_recurrence_screen.dart';
 
 /// What [ReminderEditScreen] hands back via Navigator.pop - null (no
@@ -12,8 +13,17 @@ sealed class ReminderEditResult {
 class ReminderSet extends ReminderEditResult {
   final DateTime reminderAt;
   final RepeatRule? repeatRule;
+  final String? soundUri;
+  final String? soundTitle;
+  final NotificationIconOption icon;
 
-  const ReminderSet(this.reminderAt, this.repeatRule);
+  const ReminderSet(
+    this.reminderAt,
+    this.repeatRule, {
+    this.soundUri,
+    this.soundTitle,
+    this.icon = NotificationIconOption.defaultIcon,
+  });
 }
 
 class ReminderRemoved extends ReminderEditResult {
@@ -43,6 +53,44 @@ String repeatRuleLabel(RepeatRule? rule) {
   return rule.summary;
 }
 
+/// A Flutter-side stand-in for each [NotificationIconOption]'s actual
+/// Android drawable (a native resource this UI can't render directly) -
+/// shown both as the Icon row's own leading icon and to the left of each
+/// option's name in its picker, so the choice is recognizable at a glance
+/// rather than by label text alone. A plain Material icon works fine as a
+/// stand-in for [bell]/[star]/[pin]/[pencil], which already have an
+/// obvious Material equivalent; [defaultIcon]'s real native drawable is
+/// jotes' own "J" mark instead (see ic_stat_default.png), which no
+/// Material icon resembles, so [iconPreviewWidget] below renders the same
+/// glyph directly as an image rather than falling back to some unrelated
+/// stand-in shape.
+IconData _iconPreview(NotificationIconOption icon) => switch (icon) {
+  NotificationIconOption.defaultIcon => Icons.notifications_none,
+  NotificationIconOption.bell => Icons.notifications,
+  NotificationIconOption.star => Icons.star,
+  NotificationIconOption.pin => Icons.location_on,
+  NotificationIconOption.pencil => Icons.edit,
+};
+
+/// The actual widget shown for [icon]'s preview - see [_iconPreview]'s own
+/// doc comment for why [NotificationIconOption.defaultIcon] is special-cased
+/// to an image instead. Tinted via [BlendMode.srcIn] against the ambient
+/// icon color (same as how an [Icon] tints its glyph) so it matches the
+/// other four options' color in both light and dark themes, rather than
+/// showing this asset's own baked-in (white) pixels regardless of theme.
+Widget _iconPreviewWidget(BuildContext context, NotificationIconOption icon) {
+  if (icon == NotificationIconOption.defaultIcon) {
+    return Image.asset(
+      'assets/icon/notification_glyph.png',
+      width: 24,
+      height: 24,
+      color: IconTheme.of(context).color,
+      colorBlendMode: BlendMode.srcIn,
+    );
+  }
+  return Icon(_iconPreview(icon));
+}
+
 /// One combined screen for setting or editing a note's reminder - date,
 /// time, and repeat all shown together as tappable rows, with an explicit
 /// checkmark to save - deliberately modeled on Google Calendar's own "New
@@ -63,11 +111,17 @@ String repeatRuleLabel(RepeatRule? rule) {
 class ReminderEditScreen extends StatefulWidget {
   final DateTime? initialReminderAt;
   final RepeatRule? initialRepeatRule;
+  final String? initialSoundUri;
+  final String? initialSoundTitle;
+  final NotificationIconOption initialIcon;
 
   const ReminderEditScreen({
     super.key,
     this.initialReminderAt,
     this.initialRepeatRule,
+    this.initialSoundUri,
+    this.initialSoundTitle,
+    this.initialIcon = NotificationIconOption.defaultIcon,
   });
 
   @override
@@ -77,6 +131,9 @@ class ReminderEditScreen extends StatefulWidget {
 class _ReminderEditScreenState extends State<ReminderEditScreen> {
   late DateTime _reminderAt;
   RepeatRule? _repeatRule;
+  String? _soundUri;
+  String? _soundTitle;
+  late NotificationIconOption _icon;
 
   bool get _isEditingExisting => widget.initialReminderAt != null;
 
@@ -94,6 +151,9 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
         ? initial
         : now.add(const Duration(hours: 1));
     _repeatRule = widget.initialRepeatRule;
+    _soundUri = widget.initialSoundUri;
+    _soundTitle = widget.initialSoundTitle;
+    _icon = widget.initialIcon;
   }
 
   Future<void> _pickDate() async {
@@ -221,6 +281,116 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
     }
   }
 
+  /// Offers this device's own notification sounds (see
+  /// NotificationAppearanceSettings.systemSoundOptions - queried fresh on
+  /// each tap rather than once in initState, so a platform failure only
+  /// costs this one tap being a no-op rather than gating the whole row
+  /// behind an async load). Anchored next to the Sound row, same technique
+  /// as [_pickRepeat].
+  Future<void> _pickSound(BuildContext anchorContext) async {
+    // Computed before the systemSoundOptions() await below, same as
+    // _pickRepeat's own (synchronous) position calc - avoids carrying a
+    // BuildContext-derived RenderBox across an async gap.
+    final overlay =
+        Overlay.of(anchorContext).context.findRenderObject() as RenderBox;
+    final button = anchorContext.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final options = await NotificationAppearanceSettings.instance
+        .systemSoundOptions();
+    if (!anchorContext.mounted || options.isEmpty) return;
+
+    final selected = await showMenu<NotificationSoundOption>(
+      context: anchorContext,
+      position: position,
+      items: [
+        for (final option in options)
+          PopupMenuItem<NotificationSoundOption>(
+            key: Key('reminder_sound_option_${option.uri}'),
+            value: option,
+            // Fixed width, same reasoning (and same value) as the icon
+            // picker's own options below - a system sound's title can be
+            // just as short as "Default", and PopupMenuItem's intrinsic
+            // sizing can squeeze a short label into an unwanted wrap.
+            child: SizedBox(
+              width: 220,
+              child: ListTile(
+                title: Text(option.title),
+                trailing:
+                    NotificationAppearanceSettings.instance.isSelectedSound(
+                      _soundUri,
+                      option.uri,
+                    )
+                    ? const Icon(Icons.check)
+                    : null,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+      ],
+    );
+    if (selected == null || !mounted) return;
+    setState(() {
+      _soundUri = selected.uri;
+      _soundTitle = selected.title;
+    });
+  }
+
+  /// Anchored next to the Icon row, same technique as [_pickRepeat].
+  Future<void> _pickIcon(BuildContext anchorContext) async {
+    final overlay =
+        Overlay.of(anchorContext).context.findRenderObject() as RenderBox;
+    final button = anchorContext.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final selected = await showMenu<NotificationIconOption>(
+      context: anchorContext,
+      position: position,
+      items: [
+        for (final option in NotificationIconOption.values)
+          PopupMenuItem<NotificationIconOption>(
+            key: Key('reminder_icon_option_${option.name}'),
+            value: option,
+            // A fixed width, not just contentPadding: EdgeInsets.zero like
+            // the other pickers' plain-text options - PopupMenuItem sizes
+            // itself to its child's intrinsic width, and a ListTile with a
+            // leading icon (unlike Repeat's own icon-less options above)
+            // reports a narrower one than it actually needs, squeezing
+            // even a short label like "Default" into an unwanted two-line
+            // wrap ("Defaul" / "t").
+            child: SizedBox(
+              width: 220,
+              child: ListTile(
+                leading: _iconPreviewWidget(context, option),
+                title: Text(option.label),
+                trailing: option == _icon ? const Icon(Icons.check) : null,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+      ],
+    );
+    if (selected == null || !mounted) return;
+    setState(() => _icon = selected);
+  }
+
   Future<void> _openCustomRecurrence() async {
     final result = await Navigator.push<RepeatRule>(
       context,
@@ -242,7 +412,16 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
       );
       return;
     }
-    Navigator.pop(context, ReminderSet(_reminderAt, _repeatRule));
+    Navigator.pop(
+      context,
+      ReminderSet(
+        _reminderAt,
+        _repeatRule,
+        soundUri: _soundUri,
+        soundTitle: _soundTitle,
+        icon: _icon,
+      ),
+    );
   }
 
   void _remove() => Navigator.pop(context, const ReminderRemoved());
@@ -299,6 +478,25 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
               title: const Text('Repeat'),
               subtitle: Text(repeatRuleLabel(_repeatRule)),
               onTap: () => _pickRepeat(repeatRowContext),
+            ),
+          ),
+          const Divider(height: 1),
+          Builder(
+            builder: (soundRowContext) => ListTile(
+              key: const Key('reminder_edit_sound'),
+              leading: const Icon(Icons.volume_up_outlined),
+              title: const Text('Notification sound'),
+              subtitle: Text(_soundTitle ?? 'Default'),
+              onTap: () => _pickSound(soundRowContext),
+            ),
+          ),
+          Builder(
+            builder: (iconRowContext) => ListTile(
+              key: const Key('reminder_edit_icon'),
+              leading: _iconPreviewWidget(iconRowContext, _icon),
+              title: const Text('Notification icon'),
+              subtitle: Text(_icon.label),
+              onTap: () => _pickIcon(iconRowContext),
             ),
           ),
         ],

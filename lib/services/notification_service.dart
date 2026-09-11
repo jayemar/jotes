@@ -9,9 +9,9 @@ import 'package:timezone/timezone.dart' as tz;
 import '../models/note.dart';
 import 'background_sync_service.dart';
 import 'db_service.dart';
+import 'notification_appearance_settings.dart';
 import 'snooze_settings.dart';
 
-const _channelId = 'jotes_reminders';
 const _channelName = 'Reminders';
 
 // Ids for the notification actions below - reported back via
@@ -38,30 +38,43 @@ const _snoozeActionId = 'snooze';
 /// after an actual restart.
 const _handledReminderIdsPrefsKey = 'handled_reminder_note_ids';
 
-NotificationDetails _reminderNotificationDetails(Note note) {
+Future<NotificationDetails> _reminderNotificationDetails(Note note) async {
+  final appearance = NotificationAppearanceSettings.instance;
+  final noteAppearance = await appearance.getForNote(note.id);
+  final channelId = appearance.channelIdFor(noteAppearance.soundUri);
+  final soundUri = appearance.effectiveSoundUri(noteAppearance.soundUri);
   return NotificationDetails(
     android: AndroidNotificationDetails(
-      _channelId,
+      channelId,
       _channelName,
+      icon: noteAppearance.icon.drawable,
+      sound: soundUri == null ? null : UriAndroidNotificationSound(soundUri),
       importance: Importance.high,
       priority: Priority.high,
       styleInformation: BigTextStyleInformation(note.body),
       category: AndroidNotificationCategory.alarm,
       // Deliberately false (the default) - a reminder should behave like
-      // an ordinary high-importance notification (heads-up while
-      // unlocked, sound/vibration plus whatever ambient/lock-screen peek
-      // the device itself offers), not take over the screen and launch
-      // the app on its own. This was briefly turned back on (see git
-      // history) for the screen-off-wakes-up case Android's docs promise
-      // for this flag, then reverted again: USE_FULL_SCREEN_INTENT is a
-      // Settings-granted permission that a sideloaded (non-Play-Store)
-      // install of this app appears to lose on every update, with no
-      // fix available from app code - the OS, not jotes, decides whether
-      // a previously-granted USE_FULL_SCREEN_INTENT survives an update,
-      // so re-enabling it just means re-granting it after every future
-      // build. Tapping the notification still opens the reminder popup as
-      // before (see onNoteTapped/getLaunchNoteId in main.dart) - only the
-      // automatic, un-tapped takeover is gone.
+      // an ordinary high-importance notification (heads-up with sound/
+      // vibration and a screen wake for that heads-up peek, even while
+      // locked - Importance.high plus this alarm category is already
+      // enough for Android to do that on its own), not take over the
+      // screen and launch the app on its own. This was briefly turned
+      // back on (see git history) for the screen-off-wakes-up case
+      // Android's docs promise for this flag, then reverted again:
+      // USE_FULL_SCREEN_INTENT is a Settings-granted permission that a
+      // sideloaded (non-Play-Store) install of this app appears to lose
+      // on every update, with no fix available from app code - the OS,
+      // not jotes, decides whether a previously-granted
+      // USE_FULL_SCREEN_INTENT survives an update, so re-enabling it just
+      // means re-granting it after every future build. Tapping the
+      // notification still opens the reminder popup (see
+      // onNoteTapped/getLaunchNoteId in main.dart) - but, since
+      // MainActivity no longer declares showWhenLocked/turnScreenOn (see
+      // AndroidManifest.xml and git history), doing so from a locked
+      // device now asks for the device's own unlock first, the same as
+      // opening any other app from a notification - only the automatic,
+      // un-tapped, unlock-bypassing takeover this flag would have enabled
+      // is gone.
       fullScreenIntent: false,
       // Without this, merely tapping the notification to view it (which
       // the plugin treats as the same thing as opening it) auto-cancels it
@@ -274,7 +287,7 @@ class NotificationService {
         note.title.isEmpty ? 'Reminder' : note.title,
         note.body.isEmpty ? 'You have a note reminder.' : note.body,
         tz.TZDateTime.from(fireTime, tz.local),
-        _reminderNotificationDetails(note),
+        await _reminderNotificationDetails(note),
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
@@ -320,7 +333,7 @@ class NotificationService {
         note.notificationId,
         note.title.isEmpty ? 'Reminder' : note.title,
         note.body.isEmpty ? 'You have a note reminder.' : note.body,
-        _reminderNotificationDetails(note),
+        await _reminderNotificationDetails(note),
         payload: note.id,
       );
     }

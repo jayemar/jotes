@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/note.dart';
 import '../services/db_service.dart';
+import '../services/notification_appearance_settings.dart';
 import '../services/notification_service.dart';
 import '../services/pb_service.dart';
 import '../services/widget_service.dart';
@@ -73,6 +74,14 @@ class NotesNotifier extends AsyncNotifier<List<Note>> {
     } catch (_) {
       // Note is already deleted; a failed notification cancel is not fatal.
     }
+
+    // Best-effort cleanup of the per-note sound/icon entry (see
+    // NotificationAppearanceSettings) so its local store doesn't grow
+    // forever - not fatal on its own if it fails, same reasoning as the
+    // notification cancel above.
+    try {
+      await NotificationAppearanceSettings.instance.clearForNote(note.id);
+    } catch (_) {}
 
     PbService.instance.delete(note.id).ignore();
     ref.invalidateSelf();

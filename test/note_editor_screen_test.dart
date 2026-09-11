@@ -91,6 +91,12 @@ void _mainWidgetTests() {
     // the on-screen keyboard' group below overrides this to test the gating
     // itself.
     _testView().viewInsets = const FakeViewPadding(bottom: 300);
+    // NotificationAppearanceSettings (read/written whenever a reminder is
+    // set/removed - see _openReminderEditor/_clearReminder) needs a
+    // registered SharedPreferences mock to resolve at all, not just tests
+    // that explicitly exercise it - without this, SharedPreferences.getInstance()
+    // throws with no platform implementation registered under flutter_test.
+    SharedPreferences.setMockInitialValues({});
   });
 
   tearDown(_testView().resetViewInsets);
@@ -1208,6 +1214,32 @@ void _mainWidgetTests() {
   );
 
   testWidgets(
+    'opening an existing note and immediately backing out without any '
+    'edits does not save it - a plain view must not bump `updated` and '
+    'reorder a "last edited" sort just from being opened',
+    (tester) async {
+      final note = _existingNote();
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, isEmpty);
+    },
+  );
+
+  testWidgets(
     'the back button while the body editor is mid-edit backs out of edit '
     'mode instead of popping (and saving) the whole note screen',
     (tester) async {
@@ -1241,12 +1273,16 @@ void _mainWidgetTests() {
       expect(find.byTooltip('Set reminder'), findsOneWidget);
       expect(notifier.saved, isEmpty);
 
-      // A second back press now genuinely pops (and saves) the screen,
-      // confirming the first press only consumed the edit-mode exit.
+      // A second back press now genuinely pops the screen, confirming the
+      // first press only consumed the edit-mode exit - but nothing was
+      // actually typed, so this must not save at all (see PopScope's own
+      // `if (_dirty)` check - unconditionally saving here regardless of
+      // _dirty used to stamp a fresh `updated` on a no-op close, which
+      // "sort by last edited" then read as a real edit).
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
 
-      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved, isEmpty);
     },
   );
 

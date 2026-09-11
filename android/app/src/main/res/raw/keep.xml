@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Notification icon drawables (see NotificationIconOption in
+  notification_appearance_settings.dart) are only ever referenced by a
+  plain string passed through AndroidNotificationDetails.icon at runtime -
+  nothing in a layout, manifest, or Kotlin/Java source references them
+  directly, so R8's resource shrinker marks them "not reachable" and
+  strips them from a release build (confirmed via
+  build/app/intermediates/mapping/release/minifyReleaseWithR8/resources.txt
+  after hitting a PlatformException(invalid_icon, ...) on-device from a
+  release build). This file tells the shrinker to keep them regardless -
+  see https://developer.android.com/studio/build/shrink-code#keep-resources.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_default,@drawable/ic_stat_bell,@drawable/ic_stat_star,@drawable/ic_stat_pin,@drawable/ic_stat_pencil" />

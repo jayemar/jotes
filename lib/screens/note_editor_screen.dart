@@ -12,6 +12,7 @@ import '../models/repeat_rule.dart';
 import '../providers/note_toolbar_provider.dart';
 import '../providers/notes_provider.dart';
 import '../services/markdown_export_service.dart';
+import '../services/notification_appearance_settings.dart';
 import '../services/notification_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_body_editor.dart';
@@ -54,6 +55,9 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   bool _reminderResolved = false;
   RepeatRule? _repeatRule;
   int _repeatOccurrenceNumber = 1;
+  String? _reminderSoundUri;
+  String? _reminderSoundTitle;
+  NotificationIconOption _reminderIcon = NotificationIconOption.defaultIcon;
   bool _pinned = false;
   bool _dirty = false;
   bool _saving = false;
@@ -89,6 +93,23 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     // back-button presses before the first save/pop completes) update the
     // same note instead of each minting a fresh id and creating a duplicate.
     _noteId = n?.id ?? _uuid.v4();
+
+    if (n != null) {
+      // Not part of Note itself (see NotificationAppearanceSettings' own
+      // doc comment for why), so unlike every other field copied from `n`
+      // above, this needs its own async load rather than being available
+      // synchronously here.
+      NotificationAppearanceSettings.instance.getForNote(n.id).then((
+        appearance,
+      ) {
+        if (!mounted) return;
+        setState(() {
+          _reminderSoundUri = appearance.soundUri;
+          _reminderSoundTitle = appearance.soundTitle;
+          _reminderIcon = appearance.icon;
+        });
+      });
+    }
 
     if (n == null &&
         widget.initialBody != null &&
@@ -207,13 +228,22 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         builder: (_) => ReminderEditScreen(
           initialReminderAt: _reminderAt,
           initialRepeatRule: _repeatRule,
+          initialSoundUri: _reminderSoundUri,
+          initialSoundTitle: _reminderSoundTitle,
+          initialIcon: _reminderIcon,
         ),
       ),
     );
     if (result == null || !mounted) return;
 
     switch (result) {
-      case ReminderSet(:final reminderAt, :final repeatRule):
+      case ReminderSet(
+        :final reminderAt,
+        :final repeatRule,
+        :final soundUri,
+        :final soundTitle,
+        :final icon,
+      ):
         setState(() {
           _reminderAt = reminderAt;
           // A fresh reminder cycle - see Note.reminderResolved's own doc
@@ -226,8 +256,22 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
           _reminderResolved = false;
           _repeatRule = repeatRule;
           _repeatOccurrenceNumber = 1;
+          _reminderSoundUri = soundUri;
+          _reminderSoundTitle = soundTitle;
+          _reminderIcon = icon;
           _dirty = true;
         });
+        // Persisted separately from the note itself - see
+        // NotificationAppearanceSettings' own doc comment for why this
+        // isn't just another Note field.
+        await NotificationAppearanceSettings.instance.setForNote(
+          _noteId,
+          NoteNotificationAppearance(
+            soundUri: soundUri,
+            soundTitle: soundTitle,
+            icon: icon,
+          ),
+        );
         // Persist (and thus actually schedule the notification) right
         // now, rather than deferring to the pop-triggered autosave:
         // leaving the screen via the home button/app switcher/OS process
@@ -324,8 +368,12 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       // own doc comment.
       _repeatRule = null;
       _repeatOccurrenceNumber = 1;
+      _reminderSoundUri = null;
+      _reminderSoundTitle = null;
+      _reminderIcon = NotificationIconOption.defaultIcon;
       _dirty = true;
     });
+    await NotificationAppearanceSettings.instance.clearForNote(_noteId);
     await _save();
   }
 
@@ -556,7 +604,15 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         _saving = true;
         final nav = Navigator.of(context);
         try {
-          if (_dirty || widget.existing != null) await _save();
+          // _dirty alone, not "or this is an existing note" - every real
+          // mutation path already sets it (title/body via _markDirty,
+          // color, reminder set/clear, pin), so unconditionally saving an
+          // existing note here regardless of _dirty was a no-op-content
+          // save that still stamped a fresh `updated` - which "sort by
+          // last edited" (see NoteSortOrder.updatedNewest/updatedOldest)
+          // then read as a real edit, reordering a note just from opening
+          // and closing it with nothing changed.
+          if (_dirty) await _save();
         } finally {
           _saving = false;
         }
