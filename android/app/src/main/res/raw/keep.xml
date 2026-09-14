@@ -12,4 +12,4 @@
   see https://developer.android.com/studio/build/shrink-code#keep-resources.
 -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@drawable/ic_stat_default,@drawable/ic_stat_bell,@drawable/ic_stat_star,@drawable/ic_stat_pin,@drawable/ic_stat_pencil" />
+    tools:keep="@drawable/ic_stat_default,@drawable/ic_stat_shamrock,@drawable/ic_stat_biohazard,@drawable/ic_stat_dharma,@drawable/ic_stat_atom,@drawable/ic_stat_pentagram" />

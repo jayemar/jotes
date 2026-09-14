@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/repeat_rule.dart';
@@ -53,31 +56,20 @@ String repeatRuleLabel(RepeatRule? rule) {
   return rule.summary;
 }
 
-/// A Flutter-side stand-in for each [NotificationIconOption]'s actual
-/// Android drawable (a native resource this UI can't render directly) -
-/// shown both as the Icon row's own leading icon and to the left of each
-/// option's name in its picker, so the choice is recognizable at a glance
-/// rather than by label text alone. A plain Material icon works fine as a
-/// stand-in for [bell]/[star]/[pin]/[pencil], which already have an
-/// obvious Material equivalent; [defaultIcon]'s real native drawable is
-/// jotes' own "J" mark instead (see ic_stat_default.png), which no
-/// Material icon resembles, so [iconPreviewWidget] below renders the same
-/// glyph directly as an image rather than falling back to some unrelated
-/// stand-in shape.
-IconData _iconPreview(NotificationIconOption icon) => switch (icon) {
-  NotificationIconOption.defaultIcon => Icons.notifications_none,
-  NotificationIconOption.bell => Icons.notifications,
-  NotificationIconOption.star => Icons.star,
-  NotificationIconOption.pin => Icons.location_on,
-  NotificationIconOption.pencil => Icons.edit,
-};
-
-/// The actual widget shown for [icon]'s preview - see [_iconPreview]'s own
-/// doc comment for why [NotificationIconOption.defaultIcon] is special-cased
-/// to an image instead. Tinted via [BlendMode.srcIn] against the ambient
-/// icon color (same as how an [Icon] tints its glyph) so it matches the
-/// other four options' color in both light and dark themes, rather than
-/// showing this asset's own baked-in (white) pixels regardless of theme.
+/// The actual widget shown for [icon]'s preview - shown both as the Icon
+/// row's own leading icon and to the left of each option's name in its
+/// picker, so the choice is recognizable at a glance rather than by label
+/// text alone. None of [NotificationIconOption]'s non-default values have an
+/// obvious Material icon equivalent (there's no built-in "wheel of dharma"
+/// glyph, say), so each is instead drawn by [_NotificationIconGlyphPainter]
+/// below, mirroring the same shape as its actual Android drawable (see
+/// android/app/src/main/res/drawable/ic_stat_*.xml) rather than some
+/// unrelated stand-in icon. [defaultIcon]'s real native drawable is jotes'
+/// own "J" mark instead (see ic_stat_default.png), rendered directly as an
+/// image tinted via [BlendMode.srcIn] against the ambient icon color (same
+/// as how an [Icon] tints its glyph) so it matches the other options' color
+/// in both light and dark themes, rather than showing this asset's own
+/// baked-in (white) pixels regardless of theme.
 Widget _iconPreviewWidget(BuildContext context, NotificationIconOption icon) {
   if (icon == NotificationIconOption.defaultIcon) {
     return Image.asset(
@@ -88,7 +80,131 @@ Widget _iconPreviewWidget(BuildContext context, NotificationIconOption icon) {
       colorBlendMode: BlendMode.srcIn,
     );
   }
-  return Icon(_iconPreview(icon));
+  return CustomPaint(
+    size: const Size(24, 24),
+    painter: _NotificationIconGlyphPainter(
+      icon,
+      color: IconTheme.of(context).color ?? Colors.black,
+    ),
+  );
+}
+
+/// Draws the same shape as [icon]'s actual Android status-bar drawable
+/// (android/app/src/main/res/drawable/ic_stat_*.xml) directly on a 24x24
+/// canvas, so this in-app preview is recognizably the same glyph rather than
+/// an unrelated Material icon stand-in. Each branch's geometry (radii,
+/// angles, gaps) mirrors that XML file's own hand-picked constants - see
+/// that file's own doc comment for what each shape is meant to depict.
+class _NotificationIconGlyphPainter extends CustomPainter {
+  const _NotificationIconGlyphPainter(this.icon, {required this.color});
+
+  final NotificationIconOption icon;
+  final Color color;
+
+  static const _center = Offset(12, 12);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    switch (icon) {
+      case NotificationIconOption.defaultIcon:
+        break; // Handled by Image.asset in _iconPreviewWidget instead.
+      case NotificationIconOption.shamrock:
+        _paintShamrock(canvas);
+      case NotificationIconOption.biohazard:
+        _paintBiohazard(canvas);
+      case NotificationIconOption.dharma:
+        _paintDharma(canvas);
+      case NotificationIconOption.atom:
+        _paintAtom(canvas);
+      case NotificationIconOption.pentagram:
+        _paintPentagram(canvas);
+    }
+  }
+
+  Offset _fromCenter(Offset center, double radius, double degrees) {
+    final rad = degrees * math.pi / 180;
+    return center + Offset(radius * math.cos(rad), radius * math.sin(rad));
+  }
+
+  Paint get _fill => Paint()
+    ..color = color
+    ..style = PaintingStyle.fill;
+
+  Paint _stroke(double width) => Paint()
+    ..color = color
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = width
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
+
+  void _paintShamrock(Canvas canvas) {
+    const leafCenter = Offset(12, 10.5);
+    const leafRadius = 3.7;
+    for (final angle in [-90.0, 30.0, 150.0]) {
+      canvas.drawCircle(_fromCenter(leafCenter, 3, angle), leafRadius, _fill);
+    }
+    canvas.drawLine(const Offset(12, 13.5), const Offset(12, 21), _stroke(1.8));
+  }
+
+  void _paintBiohazard(Canvas canvas) {
+    const ringRadius = 3.4;
+    const gapHalfDegrees = 32.0;
+    for (final angle in [-90.0, 30.0, 150.0]) {
+      final ringCenter = _fromCenter(_center, 4.3, angle);
+      final rect = Rect.fromCircle(center: ringCenter, radius: ringRadius);
+      final gapCenter = angle + 180;
+      canvas.drawArc(
+        rect,
+        (gapCenter + gapHalfDegrees) * math.pi / 180,
+        (360 - 2 * gapHalfDegrees) * math.pi / 180,
+        false,
+        _stroke(2.1),
+      );
+    }
+    canvas.drawCircle(_center, 1.3, _fill);
+  }
+
+  void _paintDharma(Canvas canvas) {
+    canvas.drawCircle(_center, 8.6, _stroke(1.5));
+    for (var angle = 0.0; angle < 360; angle += 45) {
+      canvas.drawLine(
+        _fromCenter(_center, 2.2, angle),
+        _fromCenter(_center, 8, angle),
+        _stroke(1.3),
+      );
+    }
+    canvas.drawCircle(_center, 1.8, _fill);
+  }
+
+  void _paintAtom(Canvas canvas) {
+    for (final rotation in [0.0, 60.0, 120.0]) {
+      canvas.save();
+      canvas.translate(_center.dx, _center.dy);
+      canvas.rotate(rotation * math.pi / 180);
+      canvas.drawOval(
+        Rect.fromCenter(center: Offset.zero, width: 18.4, height: 6.4),
+        _stroke(1.1),
+      );
+      canvas.restore();
+    }
+    canvas.drawCircle(_center, 1.5, _fill);
+  }
+
+  void _paintPentagram(Canvas canvas) {
+    final vertices = [
+      for (var k = 0; k < 5; k++) _fromCenter(_center, 9.2, -90 + k * 72.0),
+    ];
+    final path = Path()..moveTo(vertices[0].dx, vertices[0].dy);
+    for (final i in [2, 4, 1, 3]) {
+      path.lineTo(vertices[i].dx, vertices[i].dy);
+    }
+    path.close();
+    canvas.drawPath(path, _stroke(1.4));
+  }
+
+  @override
+  bool shouldRepaint(_NotificationIconGlyphPainter oldDelegate) =>
+      oldDelegate.icon != icon || oldDelegate.color != color;
 }
 
 /// One combined screen for setting or editing a note's reminder - date,
@@ -343,6 +459,10 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
       _soundUri = selected.uri;
       _soundTitle = selected.title;
     });
+    // Fire-and-forget preview, so picking a sound is audible rather than
+    // just a name - not awaited, since there's nothing left to do here once
+    // playback has started.
+    unawaited(NotificationAppearanceSettings.instance.playSound(selected.uri));
   }
 
   /// Anchored next to the Icon row, same technique as [_pickRepeat].

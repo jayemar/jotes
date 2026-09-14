@@ -3,6 +3,7 @@ package com.jayemar.jotes
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
@@ -20,15 +21,27 @@ private const val SHARE_CHANNEL = "com.jayemar.jotes/share"
 private const val PERIODIC_REFRESH_CHANNEL = "com.jayemar.jotes/periodic_refresh"
 private const val PERIODIC_REFRESH_WORK_NAME = "periodic_refresh"
 private const val NOTIFICATION_SOUNDS_CHANNEL = "com.jayemar.jotes/notification_sounds"
-// Not an OS limit - RingtoneManager can return dozens of sounds. Capped here
-// because NotificationAppearanceSettings.channelId (Dart side) mints a new,
-// permanent Android notification channel per distinct sound a user actually
-// picks (channels are immutable once created, so a shared channel can't
-// just have its sound changed in place - see that class's own doc comment),
-// and an unbounded picker would mean an unbounded, never-cleaned-up number
-// of "Reminders" entries cluttering this app's system notification
-// settings over time.
-private const val MAX_NOTIFICATION_SOUND_OPTIONS = 6
+// A curated allowlist, by RingtoneManager's own title, of which of this
+// device's notification sounds the picker offers - not "whatever
+// RingtoneManager happens to return first" (this app's previous behavior),
+// so the choices are ones actually picked for jotes rather than however the
+// OS orders its own notification-sound list. Also keeps the picker (and so
+// the number of permanent, immutable Android notification channels
+// NotificationAppearanceSettings.channelId mints, one per distinct sound a
+// user actually picks - see that class's own doc comment) bounded, same
+// reasoning as the flat cap this replaced.
+private val CURATED_NOTIFICATION_SOUND_TITLES =
+    listOf(
+        "Yahoo - Chime",
+        "Yahoo - Snip Snap",
+        "Yahoo - Mallet",
+        "Yahoo - Skipping Rocks",
+        "Yahoo - Reflective",
+    )
+// This prefix is just this sound pack's own branding - stripped from the
+// title the picker actually shows, so options read "Chime" rather than
+// "Yahoo - Chime".
+private const val CURATED_SOUND_TITLE_PREFIX = "Yahoo - "
 // The shortest interval Android's WorkManager allows for periodic work -
 // anything shorter is silently clamped to this by the OS anyway. See
 // PeriodicRefreshWorker's own doc comment for what this actually refreshes.
@@ -152,6 +165,18 @@ private val autostartActivitiesByManufacturer =
 class MainActivity : FlutterActivity() {
   private var shareChannel: MethodChannel? = null
 
+  // The sound option a user is currently previewing from the picker (see
+  // playNotificationSound below) - tracked so a second preview tap stops
+  // the previous one instead of layering playback, and so backgrounding
+  // the app (onPause) doesn't leave a preview audible after jotes is no
+  // longer on screen.
+  private var previewRingtone: Ringtone? = null
+
+  override fun onPause() {
+    super.onPause()
+    previewRingtone?.stop()
+  }
+
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AUTOSTART_CHANNEL)
@@ -188,6 +213,10 @@ class MainActivity : FlutterActivity() {
         .setMethodCallHandler { call, result ->
           when (call.method) {
             "listNotificationSounds" -> result.success(listNotificationSounds())
+            "playNotificationSound" -> {
+              playNotificationSound(call.arguments as String)
+              result.success(null)
+            }
             else -> result.notImplemented()
           }
         }
@@ -242,12 +271,15 @@ class MainActivity : FlutterActivity() {
 
   /**
    * "Default" (this device's own configured default notification sound)
-   * first, then up to [MAX_NOTIFICATION_SOUND_OPTIONS] - 1 more of this
-   * device's own installed notification sounds, queried via
+   * first, then whichever of [CURATED_NOTIFICATION_SOUND_TITLES] this
+   * device's own installed notification sounds (queried via
    * [RingtoneManager] rather than bundled into the app - see
-   * NotificationAppearanceSettings' own doc comment (Dart side) for why.
-   * Best-effort: any failure querying the device's sound list still
-   * returns the "Default" entry, since that one needs no query at all.
+   * NotificationAppearanceSettings' own doc comment (Dart side) for why)
+   * actually has, in that same curated order - not the OS's own cursor
+   * order, and skipping any curated title this particular device doesn't
+   * have installed rather than leaving a gap. Best-effort: any failure
+   * querying the device's sound list still returns the "Default" entry,
+   * since that one needs no query at all.
    */
   private fun listNotificationSounds(): List<Map<String, String>> {
     val sounds =
@@ -261,18 +293,44 @@ class MainActivity : FlutterActivity() {
       val manager = RingtoneManager(this)
       manager.setType(RingtoneManager.TYPE_NOTIFICATION)
       val cursor = manager.cursor
-      while (cursor.moveToNext() && sounds.size < MAX_NOTIFICATION_SOUND_OPTIONS) {
+      val uriByTitle = mutableMapOf<String, String>()
+      while (cursor.moveToNext()) {
         val title = cursor.getString(RingtoneManager.TITLE_COLUMN_INDEX)
-        val uri =
-            "${cursor.getString(RingtoneManager.URI_COLUMN_INDEX)}/" +
-                cursor.getString(RingtoneManager.ID_COLUMN_INDEX)
-        sounds.add(mapOf("uri" to uri, "title" to title))
+        if (title in CURATED_NOTIFICATION_SOUND_TITLES && title !in uriByTitle) {
+          uriByTitle[title] =
+              "${cursor.getString(RingtoneManager.URI_COLUMN_INDEX)}/" +
+                  cursor.getString(RingtoneManager.ID_COLUMN_INDEX)
+        }
+      }
+      for (title in CURATED_NOTIFICATION_SOUND_TITLES) {
+        val uri = uriByTitle[title] ?: continue
+        sounds.add(
+            mapOf("uri" to uri, "title" to title.removePrefix(CURATED_SOUND_TITLE_PREFIX))
+        )
       }
     } catch (_: Exception) {
       // Best-effort - the "Default" entry above is always returned
       // regardless of whether the device's own sound list is queryable.
     }
     return sounds
+  }
+
+  /**
+   * Plays [uri] (one of [listNotificationSounds]'s own entries) once, as a
+   * preview for the sound picker - so picking an option is audible rather
+   * than just a name in a menu. Stops any preview already playing first,
+   * same reasoning as [onPause], so previews never overlap.
+   */
+  private fun playNotificationSound(uri: String) {
+    previewRingtone?.stop()
+    previewRingtone =
+        try {
+          RingtoneManager.getRingtone(this, Uri.parse(uri))?.also { it.play() }
+        } catch (_: Exception) {
+          // Best-effort - a preview failing to play isn't worth surfacing
+          // as an error, same reasoning as listNotificationSounds above.
+          null
+        }
   }
 
   private fun extractShare(intent: Intent?): Map<String, String>? {

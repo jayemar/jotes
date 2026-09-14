@@ -203,7 +203,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(result, isA<ReminderSet>());
-        expect((result as ReminderSet).reminderAt.isAfter(DateTime.now()), isTrue);
+        expect(
+          (result as ReminderSet).reminderAt.isAfter(DateTime.now()),
+          isTrue,
+        );
       },
     );
 
@@ -472,26 +475,37 @@ void main() {
         await tester.tap(find.byKey(const Key('reminder_edit_sound')));
         await tester.pumpAndSettle();
 
-        expect(find.byType(PopupMenuItem<NotificationSoundOption>), findsNothing);
+        expect(
+          find.byType(PopupMenuItem<NotificationSoundOption>),
+          findsNothing,
+        );
       },
     );
 
     testWidgets(
       'opens a menu of the sounds the native side returns, current choice '
-      'checked, and selecting one updates the row',
+      'checked, and selecting one updates the row and previews it',
       (tester) async {
+        final playedUris = <String>[];
         messenger.setMockMethodCallHandler(_soundsChannel, (call) async {
-          expect(call.method, 'listNotificationSounds');
-          return [
-            {
-              'uri': 'content://settings/system/notification_sound',
-              'title': 'Default',
-            },
-            {
-              'uri': 'content://media/internal/audio/media/1',
-              'title': 'Chime',
-            },
-          ];
+          switch (call.method) {
+            case 'listNotificationSounds':
+              return [
+                {
+                  'uri': 'content://settings/system/notification_sound',
+                  'title': 'Default',
+                },
+                {
+                  'uri': 'content://media/internal/audio/media/1',
+                  'title': 'Chime',
+                },
+              ];
+            case 'playNotificationSound':
+              playedUris.add(call.arguments as String);
+              return null;
+            default:
+              fail('unexpected method call: ${call.method}');
+          }
         });
         await _pumpAndOpen(tester);
 
@@ -540,6 +554,7 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Chime'), findsOneWidget);
+        expect(playedUris, ['content://media/internal/audio/media/1']);
       },
     );
   });
@@ -560,20 +575,20 @@ void main() {
       await _pumpAndOpen(
         tester,
         initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
-        initialIcon: NotificationIconOption.star,
+        initialIcon: NotificationIconOption.atom,
       );
 
       expect(
         tester
             .widget<ListTile>(find.byKey(const Key('reminder_edit_icon')))
             .subtitle,
-        isA<Text>().having((t) => t.data, 'data', 'Star'),
+        isA<Text>().having((t) => t.data, 'data', 'Atom'),
       );
     });
 
     testWidgets(
-      'opens a menu of every icon option with a preview icon next to its '
-      'name, current choice checked, and selecting one updates the row',
+      'opens a menu of every icon option with a preview next to its name, '
+      'current choice checked, and selecting one updates the row',
       (tester) async {
         await _pumpAndOpen(tester);
 
@@ -585,8 +600,15 @@ void main() {
             Key('reminder_icon_option_${option.name}'),
           );
           expect(optionFinder, findsOneWidget);
+          // The default option's preview is its real PNG glyph; every
+          // other option's preview is hand-drawn via CustomPaint (see
+          // _NotificationIconGlyphPainter) - either way, some preview
+          // widget is present next to the option's name.
+          final previewFinder = option == NotificationIconOption.defaultIcon
+              ? find.byType(Image)
+              : find.byType(CustomPaint);
           expect(
-            find.descendant(of: optionFinder, matching: find.byType(Icon)),
+            find.descendant(of: optionFinder, matching: previewFinder),
             findsWidgets,
           );
         }
@@ -607,24 +629,21 @@ void main() {
           isNotNull,
         );
 
-        await tester.tap(find.byKey(const Key('reminder_icon_option_bell')));
+        await tester.tap(
+          find.byKey(const Key('reminder_icon_option_shamrock')),
+        );
         await tester.pumpAndSettle();
 
-        expect(find.text('Bell'), findsOneWidget);
+        expect(find.text('Shamrock'), findsOneWidget);
       },
     );
   });
 
   group('saving carries sound/icon choices back in ReminderSet', () {
-    testWidgets('the chosen sound and icon are both included', (
-      tester,
-    ) async {
+    testWidgets('the chosen sound and icon are both included', (tester) async {
       messenger.setMockMethodCallHandler(_soundsChannel, (call) async {
         return [
-          {
-            'uri': 'content://media/internal/audio/media/1',
-            'title': 'Chime',
-          },
+          {'uri': 'content://media/internal/audio/media/1', 'title': 'Chime'},
         ];
       });
       ReminderEditResult? result;
@@ -664,7 +683,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('reminder_edit_icon')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('reminder_icon_option_star')));
+      await tester.tap(find.byKey(const Key('reminder_icon_option_atom')));
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('reminder_edit_save')));
@@ -674,7 +693,7 @@ void main() {
       final set = result as ReminderSet;
       expect(set.soundUri, 'content://media/internal/audio/media/1');
       expect(set.soundTitle, 'Chime');
-      expect(set.icon, NotificationIconOption.star);
+      expect(set.icon, NotificationIconOption.atom);
     });
   });
 }

@@ -22,13 +22,16 @@ void main() {
       messenger.setMockMethodCallHandler(soundsChannel, (call) async {
         expect(call.method, 'listNotificationSounds');
         return [
-          {'uri': 'content://settings/system/notification_sound', 'title': 'Default'},
+          {
+            'uri': 'content://settings/system/notification_sound',
+            'title': 'Default',
+          },
           {'uri': 'content://media/internal/audio/media/1', 'title': 'Chime'},
         ];
       });
 
-      final options =
-          await NotificationAppearanceSettings.instance.systemSoundOptions();
+      final options = await NotificationAppearanceSettings.instance
+          .systemSoundOptions();
 
       expect(options, hasLength(2));
       expect(options[0].uri, 'content://settings/system/notification_sound');
@@ -46,6 +49,34 @@ void main() {
     });
   });
 
+  group('playSound', () {
+    test('invokes the native side with the given uri', () async {
+      String? method;
+      Object? arguments;
+      messenger.setMockMethodCallHandler(soundsChannel, (call) async {
+        method = call.method;
+        arguments = call.arguments;
+        return null;
+      });
+
+      await NotificationAppearanceSettings.instance.playSound(
+        'content://media/internal/audio/media/1',
+      );
+
+      expect(method, 'playNotificationSound');
+      expect(arguments, 'content://media/internal/audio/media/1');
+    });
+
+    test('does not throw when the platform call is unavailable', () async {
+      await expectLater(
+        NotificationAppearanceSettings.instance.playSound(
+          'content://media/internal/audio/media/1',
+        ),
+        completes,
+      );
+    });
+  });
+
   group('per-note appearance', () {
     test('getForNote defaults to no sound and the default icon when '
         'nothing has been saved for this note', () async {
@@ -57,47 +88,48 @@ void main() {
       expect(appearance.icon, NotificationIconOption.defaultIcon);
     });
 
-    test('setForNote persists the choice, readable back via getForNote',
-        () async {
-      await NotificationAppearanceSettings.instance.setForNote(
-        'note-1',
-        const NoteNotificationAppearance(
-          soundUri: 'content://media/internal/audio/media/1',
-          soundTitle: 'Chime',
-          icon: NotificationIconOption.bell,
-        ),
-      );
+    test(
+      'setForNote persists the choice, readable back via getForNote',
+      () async {
+        await NotificationAppearanceSettings.instance.setForNote(
+          'note-1',
+          const NoteNotificationAppearance(
+            soundUri: 'content://media/internal/audio/media/1',
+            soundTitle: 'Chime',
+            icon: NotificationIconOption.shamrock,
+          ),
+        );
 
-      final appearance = await NotificationAppearanceSettings.instance
-          .getForNote('note-1');
+        final appearance = await NotificationAppearanceSettings.instance
+            .getForNote('note-1');
 
-      expect(
-        appearance.soundUri,
-        'content://media/internal/audio/media/1',
-      );
-      expect(appearance.soundTitle, 'Chime');
-      expect(appearance.icon, NotificationIconOption.bell);
-    });
+        expect(appearance.soundUri, 'content://media/internal/audio/media/1');
+        expect(appearance.soundTitle, 'Chime');
+        expect(appearance.icon, NotificationIconOption.shamrock);
+      },
+    );
 
     test('choices for different notes do not clobber each other', () async {
       await NotificationAppearanceSettings.instance.setForNote(
         'note-1',
-        const NoteNotificationAppearance(icon: NotificationIconOption.bell),
+        const NoteNotificationAppearance(icon: NotificationIconOption.shamrock),
       );
       await NotificationAppearanceSettings.instance.setForNote(
         'note-2',
-        const NoteNotificationAppearance(icon: NotificationIconOption.star),
+        const NoteNotificationAppearance(icon: NotificationIconOption.dharma),
       );
 
       expect(
-        (await NotificationAppearanceSettings.instance.getForNote('note-1'))
-            .icon,
-        NotificationIconOption.bell,
+        (await NotificationAppearanceSettings.instance.getForNote(
+          'note-1',
+        )).icon,
+        NotificationIconOption.shamrock,
       );
       expect(
-        (await NotificationAppearanceSettings.instance.getForNote('note-2'))
-            .icon,
-        NotificationIconOption.star,
+        (await NotificationAppearanceSettings.instance.getForNote(
+          'note-2',
+        )).icon,
+        NotificationIconOption.dharma,
       );
     });
 
@@ -105,7 +137,7 @@ void main() {
         'the defaults', () async {
       await NotificationAppearanceSettings.instance.setForNote(
         'note-1',
-        const NoteNotificationAppearance(icon: NotificationIconOption.bell),
+        const NoteNotificationAppearance(icon: NotificationIconOption.shamrock),
       );
 
       await NotificationAppearanceSettings.instance.clearForNote('note-1');
@@ -116,29 +148,34 @@ void main() {
       expect(appearance.icon, NotificationIconOption.defaultIcon);
     });
 
-    test('clearForNote for a note with no saved entry is a harmless no-op',
-        () async {
-      await expectLater(
-        NotificationAppearanceSettings.instance.clearForNote('never-saved'),
-        completes,
-      );
-    });
+    test(
+      'clearForNote for a note with no saved entry is a harmless no-op',
+      () async {
+        await expectLater(
+          NotificationAppearanceSettings.instance.clearForNote('never-saved'),
+          completes,
+        );
+      },
+    );
 
-    test('falls back to the default icon if the stored value is '
-        'unrecognized (e.g. a removed enum value from an older install)',
-        () async {
-      SharedPreferences.setMockInitialValues({
-        'notification_appearance_by_note':
-            '{"note-1":{"soundUri":null,"soundTitle":null,'
-            '"icon":"no_longer_a_real_option"}}',
-      });
+    test(
+      'falls back to the default icon if the stored value is '
+      'unrecognized (e.g. a removed enum value from an older install)',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'notification_appearance_by_note':
+              '{"note-1":{"soundUri":null,"soundTitle":null,'
+              '"icon":"no_longer_a_real_option"}}',
+        });
 
-      expect(
-        (await NotificationAppearanceSettings.instance.getForNote('note-1'))
-            .icon,
-        NotificationIconOption.defaultIcon,
-      );
-    });
+        expect(
+          (await NotificationAppearanceSettings.instance.getForNote(
+            'note-1',
+          )).icon,
+          NotificationIconOption.defaultIcon,
+        );
+      },
+    );
   });
 
   group('effectiveSoundUri', () {

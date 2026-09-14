@@ -33,17 +33,19 @@ class NotificationSoundOption {
 
 enum NotificationIconOption {
   defaultIcon('ic_stat_default', 'Default'),
-  bell('ic_stat_bell', 'Bell'),
-  star('ic_stat_star', 'Star'),
-  pin('ic_stat_pin', 'Pin'),
-  pencil('ic_stat_pencil', 'Pencil');
+  shamrock('ic_stat_shamrock', 'Shamrock'),
+  biohazard('ic_stat_biohazard', 'Biohazard'),
+  dharma('ic_stat_dharma', 'Wheel of Dharma'),
+  atom('ic_stat_atom', 'Atom'),
+  pentagram('ic_stat_pentagram', 'Pentagram');
 
   const NotificationIconOption(this.drawable, this.label);
 
   /// The Android drawable resource name to pass as
-  /// AndroidNotificationDetails.icon. [bell]/[star]/[pin]/[pencil] are
-  /// vector drawables under android/app/src/main/res/drawable/;
-  /// [defaultIcon] is instead a set of density-specific PNGs
+  /// AndroidNotificationDetails.icon. [shamrock]/[biohazard]/[dharma]/
+  /// [atom]/[pentagram] are vector drawables under
+  /// android/app/src/main/res/drawable/; [defaultIcon] is instead a set of
+  /// density-specific PNGs
   /// (drawable-{m,h,xh,xxh,xxxh}dpi/ic_stat_default.png), a proper
   /// alpha-silhouette crop of jotes' own "J" mark (see
   /// assets/icon/icon_foreground.png, the adaptive launcher icon's
@@ -128,6 +130,19 @@ class NotificationAppearanceSettings {
       ];
     } catch (_) {
       return const [];
+    }
+  }
+
+  /// Plays [uri] once as a preview - best-effort and fire-and-forget, same
+  /// reasoning as [systemSoundOptions] itself: a preview failing to play
+  /// (including on web, where this whole feature doesn't exist) isn't worth
+  /// surfacing as an error, just a picker tap that happens to be silent.
+  Future<void> playSound(String uri) async {
+    if (kIsWeb) return;
+    try {
+      await _soundsChannel.invokeMethod('playNotificationSound', uri);
+    } catch (_) {
+      // Best-effort, see doc comment above.
     }
   }
 

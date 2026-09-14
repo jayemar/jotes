@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Android status-bar icons use only this shape's alpha channel (the
+         OS silhouettes/tints it itself), so the fill/stroke colors below are
+         irrelevant on-device and only matter for previewing this file. -->
+    <!-- Atom symbol: a nucleus and three orbits, 60 degrees apart. Each
+         orbit is a sampled ellipse polyline rather than a rotated arc
+         command, so its shape doesn't depend on getting an SVG arc
+         x-axis-rotation/sweep-flag right. -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.1"
+        android:fillColor="#00000000"
+        android:pathData="M21.2,12 L21.06,11.44 L20.65,10.91 L19.97,10.4 L19.05,9.94 L17.91,9.55 L16.6,9.23 L15.15,8.99 L13.6,8.85 L12,8.8 L10.4,8.85 L8.85,8.99 L7.4,9.23 L6.09,9.55 L4.95,9.94 L4.03,10.4 L3.35,10.91 L2.94,11.44 L2.8,12 L2.94,12.56 L3.35,13.09 L4.03,13.6 L4.95,14.06 L6.09,14.45 L7.4,14.77 L8.85,15.01 L10.4,15.15 L12,15.2 L13.6,15.15 L15.15,15.01 L16.6,14.77 L17.91,14.45 L19.05,14.06 L19.97,13.6 L20.65,13.09 L21.06,12.56 Z" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.1"
+        android:fillColor="#00000000"
+        android:pathData="M16.6,4.03 L16.05,3.88 L15.37,3.97 L14.6,4.3 L13.74,4.87 L12.83,5.65 L11.9,6.63 L10.97,7.77 L10.07,9.04 L9.23,10.4 L8.47,11.81 L7.82,13.22 L7.3,14.6 L6.92,15.9 L6.69,17.07 L6.63,18.1 L6.73,18.94 L6.99,19.57 L7.4,19.97 L7.95,20.12 L8.63,20.03 L9.4,19.7 L10.26,19.13 L11.17,18.35 L12.1,17.37 L13.03,16.23 L13.93,14.96 L14.77,13.6 L15.53,12.19 L16.18,10.78 L16.7,9.4 L17.08,8.1 L17.31,6.93 L17.37,5.9 L17.27,5.06 L17.01,4.43 Z" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.1"
+        android:fillColor="#00000000"
+        android:pathData="M7.4,4.03 L6.99,4.43 L6.73,5.06 L6.63,5.9 L6.69,6.93 L6.92,8.1 L7.3,9.4 L7.82,10.78 L8.47,12.19 L9.23,13.6 L10.07,14.96 L10.97,16.23 L11.9,17.37 L12.83,18.35 L13.74,19.13 L14.6,19.7 L15.37,20.03 L16.05,20.12 L16.6,19.97 L17.01,19.57 L17.27,18.94 L17.37,18.1 L17.31,17.07 L17.08,15.9 L16.7,14.6 L16.18,13.22 L15.53,11.81 L14.77,10.4 L13.93,9.04 L13.03,7.77 L12.1,6.63 L11.17,5.65 L10.26,4.87 L9.4,4.3 L8.63,3.97 L7.95,3.88 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10.5,12 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0 Z" />
+</vector>

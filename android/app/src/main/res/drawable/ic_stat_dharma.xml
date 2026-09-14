@@ -1,0 +1,59 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Android status-bar icons use only this shape's alpha channel (the
+         OS silhouettes/tints it itself), so the fill/stroke colors below are
+         irrelevant on-device and only matter for previewing this file. -->
+    <!-- Wheel of Dharma: an outer rim, a hub, and 8 spokes. -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:pathData="M3.4,12 a8.6,8.6 0 1,0 17.2,0 a8.6,8.6 0 1,0 -17.2,0 Z" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M14.2,12 L20,12" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M13.56,10.44 L17.66,6.34" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M12,9.8 L12,4" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M10.44,10.44 L6.34,6.34" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M9.8,12 L4,12" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M10.44,13.56 L6.34,17.66" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M12,14.2 L12,20" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.3"
+        android:strokeLineCap="round"
+        android:pathData="M13.56,13.56 L17.66,17.66" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10.2,12 a1.8,1.8 0 1,0 3.6,0 a1.8,1.8 0 1,0 -3.6,0 Z" />
+</vector>

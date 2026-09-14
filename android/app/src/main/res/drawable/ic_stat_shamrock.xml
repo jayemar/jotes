@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Android status-bar icons use only this shape's alpha channel (the
+         OS silhouettes/tints it itself), so the fill/stroke colors below are
+         irrelevant on-device and only matter for previewing this file. -->
+    <!-- Three overlapping leaf circles, meeting at a shared center point. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8.3,7.5 a3.7,3.7 0 1,0 7.4,0 a3.7,3.7 0 1,0 -7.4,0 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5.7,12 a3.7,3.7 0 1,0 7.4,0 a3.7,3.7 0 1,0 -7.4,0 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10.9,12 a3.7,3.7 0 1,0 7.4,0 a3.7,3.7 0 1,0 -7.4,0 Z" />
+    <!-- Stem. -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M12,13.5 L12,21" />
+</vector>
