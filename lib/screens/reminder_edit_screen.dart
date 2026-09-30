@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:intl/intl.dart';
 import '../models/repeat_rule.dart';
 import '../services/notification_appearance_settings.dart';
@@ -382,18 +383,34 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
     );
     if (action == null || !mounted) return;
 
+    // Changing frequency/preset shouldn't silently reset a follow-
+    // local-time/fixed-zone choice already made on this reminder (see
+    // the switch's own toggle row below) - carried forward onto whatever
+    // new rule gets picked here.
+    final followsLocalTime = _repeatRule?.followsLocalTime ?? true;
+    final timezone = _repeatRule?.timezone;
+
     switch (action) {
       case 'none':
         setState(() => _repeatRule = null);
       case 'everyWeekday':
-        setState(() => _repeatRule = RepeatRule.everyWeekday());
+        setState(
+          () => _repeatRule = RepeatRule.everyWeekday().copyWith(
+            followsLocalTime: followsLocalTime,
+            timezone: timezone,
+          ),
+        );
       case 'custom':
         await _openCustomRecurrence();
       default:
         final frequency = RepeatFrequency.values.firstWhere(
           (f) => f.name == action,
         );
-        setState(() => _repeatRule = RepeatRule.preset(frequency));
+        setState(
+          () => _repeatRule = RepeatRule.preset(
+            frequency,
+          ).copyWith(followsLocalTime: followsLocalTime, timezone: timezone),
+        );
     }
   }
 
@@ -511,6 +528,46 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
     setState(() => _icon = selected);
   }
 
+  String _followsLocalTimeSubtitle(RepeatRule rule) {
+    if (rule.followsLocalTime) {
+      return 'Each reminder fires wherever this device currently is - '
+          'travels with you';
+    }
+    final zone = rule.timezone;
+    return zone != null
+        ? 'Fixed to $zone - the local time shown will shift if you travel'
+        : 'Fixed to its original time zone';
+  }
+
+  /// Turning this off captures the device's current IANA zone as the
+  /// fixed anchor (see RepeatRule's own doc comment); turning it back on
+  /// drops that anchor since local-time mode never needs one. Only
+  /// meaningful for a repeating reminder - a one-off reminder is already
+  /// a fixed absolute instant by construction, nothing to choose (see
+  /// repeat_rule.dart's doc comment for why).
+  Future<void> _onFollowsLocalTimeChanged(bool value) async {
+    final rule = _repeatRule;
+    if (rule == null) return;
+
+    String? zone;
+    if (!value) {
+      try {
+        zone = (await FlutterTimezone.getLocalTimezone()).identifier;
+      } catch (_) {
+        // Best-effort, same reasoning as every other platform-channel call
+        // in this screen (sound options, autostart detection, ...) - a
+        // failure here leaves the switch right where it was rather than
+        // surfacing an uncaught exception, since there's no fixed zone to
+        // turn this on with anyway.
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _repeatRule = rule.copyWith(followsLocalTime: value, timezone: zone);
+    });
+  }
+
   Future<void> _openCustomRecurrence() async {
     final result = await Navigator.push<RepeatRule>(
       context,
@@ -600,6 +657,15 @@ class _ReminderEditScreenState extends State<ReminderEditScreen> {
               onTap: () => _pickRepeat(repeatRowContext),
             ),
           ),
+          if (_repeatRule case final rule?)
+            SwitchListTile(
+              key: const Key('reminder_edit_follows_local_time'),
+              secondary: const Icon(Icons.public),
+              title: const Text("Follow this device's time zone"),
+              subtitle: Text(_followsLocalTimeSubtitle(rule)),
+              value: rule.followsLocalTime,
+              onChanged: _onFollowsLocalTimeChanged,
+            ),
           const Divider(height: 1),
           Builder(
             builder: (soundRowContext) => ListTile(

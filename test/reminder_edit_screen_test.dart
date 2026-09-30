@@ -391,6 +391,173 @@ void main() {
     });
   });
 
+  group('the follow-local-time switch', () {
+    const timezoneChannel = MethodChannel('flutter_timezone');
+
+    tearDown(() {
+      messenger.setMockMethodCallHandler(timezoneChannel, null);
+    });
+
+    testWidgets('is not shown when the reminder does not repeat', (
+      tester,
+    ) async {
+      await _pumpAndOpen(
+        tester,
+        initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+      );
+
+      expect(
+        find.byKey(const Key('reminder_edit_follows_local_time')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('is shown, and on, for a fresh repeating reminder', (
+      tester,
+    ) async {
+      await _pumpAndOpen(
+        tester,
+        initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+        initialRepeatRule: RepeatRule.preset(RepeatFrequency.daily),
+      );
+
+      final switchFinder = find.byKey(
+        const Key('reminder_edit_follows_local_time'),
+      );
+      expect(switchFinder, findsOneWidget);
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+    });
+
+    testWidgets('turning it off captures the device\'s current zone and '
+        'updates the subtitle', (tester) async {
+      messenger.setMockMethodCallHandler(timezoneChannel, (call) async {
+        if (call.method == 'getLocalTimezone') return 'America/Los_Angeles';
+        return null;
+      });
+      await _pumpAndOpen(
+        tester,
+        initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+        initialRepeatRule: RepeatRule.preset(RepeatFrequency.daily),
+      );
+
+      await tester.tap(
+        find.byKey(const Key('reminder_edit_follows_local_time')),
+      );
+      await tester.pumpAndSettle();
+
+      final switchFinder = find.byKey(
+        const Key('reminder_edit_follows_local_time'),
+      );
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+      expect(find.textContaining('America/Los_Angeles'), findsOneWidget);
+    });
+
+    testWidgets(
+      'if getLocalTimezone fails, the switch stays on (following local '
+      'time) rather than throwing or leaving the reminder half-changed',
+      (tester) async {
+        messenger.setMockMethodCallHandler(timezoneChannel, (call) async {
+          throw PlatformException(code: 'unavailable');
+        });
+        await _pumpAndOpen(
+          tester,
+          initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+          initialRepeatRule: RepeatRule.preset(RepeatFrequency.daily),
+        );
+
+        await tester.tap(
+          find.byKey(const Key('reminder_edit_follows_local_time')),
+        );
+        await tester.pumpAndSettle();
+
+        final switchFinder = find.byKey(
+          const Key('reminder_edit_follows_local_time'),
+        );
+        expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+        expect(find.textContaining('travels with you'), findsOneWidget);
+      },
+    );
+
+    testWidgets('turning it back on clears the captured zone', (tester) async {
+      messenger.setMockMethodCallHandler(timezoneChannel, (call) async {
+        if (call.method == 'getLocalTimezone') return 'America/Los_Angeles';
+        return null;
+      });
+      await _pumpAndOpen(
+        tester,
+        initialReminderAt: DateTime.now().add(const Duration(hours: 1)),
+        initialRepeatRule: RepeatRule(
+          frequency: RepeatFrequency.daily,
+          followsLocalTime: false,
+          timezone: 'America/Los_Angeles',
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(const Key('reminder_edit_follows_local_time')),
+      );
+      await tester.pumpAndSettle();
+
+      final switchFinder = find.byKey(
+        const Key('reminder_edit_follows_local_time'),
+      );
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+      expect(find.textContaining('America/Los_Angeles'), findsNothing);
+    });
+
+    testWidgets('saving carries followsLocalTime/timezone through in '
+        'ReminderSet', (tester) async {
+      messenger.setMockMethodCallHandler(timezoneChannel, (call) async {
+        if (call.method == 'getLocalTimezone') return 'America/Los_Angeles';
+        return null;
+      });
+      ReminderEditResult? result;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: FilledButton(
+                  key: const Key('open'),
+                  onPressed: () async {
+                    result = await Navigator.push<ReminderEditResult>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ReminderEditScreen(
+                          initialReminderAt: DateTime.now().add(
+                            const Duration(hours: 1),
+                          ),
+                          initialRepeatRule: RepeatRule.preset(
+                            RepeatFrequency.daily,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('open')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const Key('reminder_edit_follows_local_time')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reminder_edit_save')));
+      await tester.pumpAndSettle();
+
+      expect(result, isA<ReminderSet>());
+      final rule = (result as ReminderSet).repeatRule;
+      expect(rule?.followsLocalTime, isFalse);
+      expect(rule?.timezone, 'America/Los_Angeles');
+    });
+  });
+
   group('the Date and Time rows', () {
     testWidgets('tapping Date opens a date picker; confirming it updates '
         'the row label', (tester) async {

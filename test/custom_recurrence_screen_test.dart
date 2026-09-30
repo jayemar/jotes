@@ -152,6 +152,137 @@ void main() {
     expect(result, initialRule);
   });
 
+  group('followsLocalTime/timezone pass-through', () {
+    testWidgets('confirming a rule with no changes carries a fixed timezone '
+        'through unchanged - editing recurrence details must not silently '
+        'reset a fixed reminder back to following local time', (tester) async {
+      RepeatRule? result;
+      final initialRule = RepeatRule(
+        frequency: RepeatFrequency.weekly,
+        weekdays: const {DateTime.tuesday},
+        followsLocalTime: false,
+        timezone: 'America/Los_Angeles',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: FilledButton(
+                key: const Key('open'),
+                onPressed: () async {
+                  result = await Navigator.push<RepeatRule>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CustomRecurrenceScreen(
+                        initialRule: initialRule,
+                        startDate: startDate,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('open')));
+      await tester.pumpAndSettle();
+
+      await _done(tester);
+
+      expect(result?.followsLocalTime, isFalse);
+      expect(result?.timezone, 'America/Los_Angeles');
+    });
+
+    testWidgets(
+      'confirming after changing the interval still carries the fixed '
+      'timezone through, not just when nothing else changed',
+      (tester) async {
+        RepeatRule? result;
+        final initialRule = RepeatRule(
+          frequency: RepeatFrequency.weekly,
+          weekdays: const {DateTime.tuesday},
+          followsLocalTime: false,
+          timezone: 'America/Los_Angeles',
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: FilledButton(
+                  key: const Key('open'),
+                  onPressed: () async {
+                    result = await Navigator.push<RepeatRule>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CustomRecurrenceScreen(
+                          initialRule: initialRule,
+                          startDate: startDate,
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Open'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('open')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('custom_recurrence_interval')),
+          '2',
+        );
+        await tester.pumpAndSettle();
+        await _done(tester);
+
+        expect(result?.interval, 2);
+        expect(result?.followsLocalTime, isFalse);
+        expect(result?.timezone, 'America/Los_Angeles');
+      },
+    );
+
+    testWidgets('confirming a rule that follows local time stays that way - no '
+        'timezone appears just from opening/confirming this screen', (
+      tester,
+    ) async {
+      RepeatRule? result;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: FilledButton(
+                key: const Key('open'),
+                onPressed: () async {
+                  result = await Navigator.push<RepeatRule>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CustomRecurrenceScreen(
+                        initialRule: RepeatRule.preset(RepeatFrequency.weekly),
+                        startDate: startDate,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('open')));
+      await tester.pumpAndSettle();
+
+      await _done(tester);
+
+      expect(result?.followsLocalTime, isTrue);
+      expect(result?.timezone, isNull);
+    });
+  });
+
   testWidgets('entering an interval and confirming carries it through to '
       'the resulting rule', (tester) async {
     RepeatRule? result;

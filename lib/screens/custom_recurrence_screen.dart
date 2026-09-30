@@ -104,6 +104,13 @@ class _CustomRecurrenceScreenState extends State<CustomRecurrenceScreen> {
         interval: _interval,
         weekdays: _frequency == RepeatFrequency.weekly ? _weekdays : const {},
         end: end,
+        // The follow-local-time/fixed-zone choice is made on
+        // ReminderEditScreen itself, not here - carry it through
+        // unchanged rather than silently resetting a fixed rule back to
+        // following local time just because its recurrence details were
+        // edited.
+        followsLocalTime: widget.initialRule?.followsLocalTime ?? true,
+        timezone: widget.initialRule?.timezone,
       ),
     );
   }

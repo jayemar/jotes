@@ -1,5 +1,13 @@
 import 'dart:convert';
 
+import 'package:timezone/timezone.dart' as tz;
+
+/// Lets [RepeatRule.copyWith]'s timezone parameter distinguish "not
+/// provided, keep the existing value" from "explicitly set to null" -
+/// same pattern as Note's own sentinel in note.dart (a separate constant
+/// since that one is private to that file).
+const Object _sentinel = Object();
+
 /// The recurrence unit a [RepeatRule] is built on - the same four units
 /// Google Calendar's own quick-repeat presets and Custom recurrence dialog
 /// both build on.
@@ -124,11 +132,28 @@ class RepeatRule {
   /// When this rule stops recurring - see [RepeatEnd].
   final RepeatEnd end;
 
+  /// Whether each future occurrence is computed at whatever timezone the
+  /// device is currently in (true, the only behavior before this existed
+  /// - a daily 9am reminder dismissed after traveling rolls forward to
+  /// 9am in the *new* zone) or stays anchored to the specific zone it was
+  /// last set in ([timezone] - the wall-clock hour shown then shifts
+  /// instead when you travel). See [nextRuleOccurrence] for where this
+  /// actually applies - a fired occurrence is a stored absolute instant
+  /// either way, so this only affects where the *next* one lands.
+  final bool followsLocalTime;
+
+  /// Only meaningful when [followsLocalTime] is false - the IANA zone id
+  /// (e.g. "America/Los_Angeles") captured at the moment fixed-zone mode
+  /// was last turned on. Null while following local time.
+  final String? timezone;
+
   const RepeatRule({
     required this.frequency,
     this.interval = 1,
     this.weekdays = const {},
     this.end = const RepeatEndNever(),
+    this.followsLocalTime = true,
+    this.timezone,
   }) : assert(interval >= 1, 'interval must be at least 1');
 
   /// One of the original 5 quick presets (daily/weekly/monthly/yearly,
@@ -161,12 +186,18 @@ class RepeatRule {
     int? interval,
     Set<int>? weekdays,
     RepeatEnd? end,
+    bool? followsLocalTime,
+    Object? timezone = _sentinel,
   }) {
     return RepeatRule(
       frequency: frequency ?? this.frequency,
       interval: interval ?? this.interval,
       weekdays: weekdays ?? this.weekdays,
       end: end ?? this.end,
+      followsLocalTime: followsLocalTime ?? this.followsLocalTime,
+      timezone: identical(timezone, _sentinel)
+          ? this.timezone
+          : timezone as String?,
     );
   }
 
@@ -211,6 +242,8 @@ class RepeatRule {
     'interval': interval,
     'weekdays': weekdays.toList()..sort(),
     'end': end.toJson(),
+    'followsLocalTime': followsLocalTime,
+    'timezone': timezone,
   };
 
   /// Falls back to null (meaning "does not repeat") for anything
@@ -234,6 +267,10 @@ class RepeatRule {
         end: json['end'] is Map<String, dynamic>
             ? RepeatEnd.fromJson(json['end'] as Map<String, dynamic>)
             : const RepeatEndNever(),
+        // Absent (a rule encoded before this field existed) defaults to
+        // true, matching the only behavior that existed then.
+        followsLocalTime: json['followsLocalTime'] as bool? ?? true,
+        timezone: json['timezone'] as String?,
       );
     } catch (_) {
       return null;
@@ -247,7 +284,9 @@ class RepeatRule {
         other.interval == interval &&
         other.weekdays.length == weekdays.length &&
         other.weekdays.containsAll(weekdays) &&
-        other.end == end;
+        other.end == end &&
+        other.followsLocalTime == followsLocalTime &&
+        other.timezone == timezone;
   }
 
   @override
@@ -256,6 +295,8 @@ class RepeatRule {
     interval,
     Object.hashAllUnordered(weekdays),
     end,
+    followsLocalTime,
+    timezone,
   );
 
   @override
@@ -270,18 +311,30 @@ class RepeatRule {
 /// 31 + 1 month) into the following month instead of clamping to that
 /// month's last day - a deliberately simple "add N and go" recurrence, not
 /// full calendar-aware scheduling.
+///
+/// Zone-anchoring (see [RepeatRule.followsLocalTime]) is handled entirely
+/// by [from]'s own runtime type rather than a parameter here:
+/// [nextRuleOccurrence] converts [from] into a [tz.TZDateTime] in the
+/// rule's anchor zone exactly once, up front, when the rule is fixed.
+/// `.add()` on a [tz.TZDateTime] already preserves its zone (see the
+/// `timezone` package), so the daily/weekly branches need no changes at
+/// all; only monthly/yearly's literal `DateTime(...)` construction would
+/// otherwise silently discard that anchoring, so [_sameZoneDateTime]
+/// reconstructs the result using whatever kind [from] already was.
 DateTime _advanceOnce(DateTime from, RepeatRule rule) {
   return switch (rule.frequency) {
     RepeatFrequency.daily => from.add(Duration(days: rule.interval)),
     RepeatFrequency.weekly => _advanceWeekly(from, rule),
-    RepeatFrequency.monthly => DateTime(
+    RepeatFrequency.monthly => _sameZoneDateTime(
+      from,
       from.year,
       from.month + rule.interval,
       from.day,
       from.hour,
       from.minute,
     ),
-    RepeatFrequency.yearly => DateTime(
+    RepeatFrequency.yearly => _sameZoneDateTime(
+      from,
       from.year + rule.interval,
       from.month,
       from.day,
@@ -289,6 +342,23 @@ DateTime _advanceOnce(DateTime from, RepeatRule rule) {
       from.minute,
     ),
   };
+}
+
+/// Constructs a new DateTime with the given wall-clock fields, matching
+/// [like]'s own "kind": a plain local [DateTime] if [like] is one, or a
+/// [tz.TZDateTime] in [like]'s own zone if [like] is one - see
+/// [_advanceOnce]'s own doc comment for why this exists.
+DateTime _sameZoneDateTime(
+  DateTime like,
+  int year,
+  int month,
+  int day,
+  int hour,
+  int minute,
+) {
+  return like is tz.TZDateTime
+      ? tz.TZDateTime(like.location, year, month, day, hour, minute)
+      : DateTime(year, month, day, hour, minute);
 }
 
 /// [RepeatRule.weekdays] empty means "same weekday every [interval]
@@ -326,6 +396,41 @@ bool _isPastEnd(RepeatRule rule, DateTime date, int occurrenceNumber) {
   };
 }
 
+/// Reinterprets [from]'s own wall-clock fields (year/month/day/hour/
+/// minute - not the absolute instant it represents) as being in
+/// [rule].timezone, when [rule] is fixed - the one-time conversion that
+/// makes every subsequent [_advanceOnce] step in [nextRuleOccurrence]
+/// automatically zone-anchored (see that function's own doc comment).
+/// Leaves [from] untouched when following local time (the default), or
+/// when a fixed rule is somehow missing its own timezone (shouldn't
+/// happen in practice - the UI always captures one when turning fixed
+/// mode on - but degrading to today's local-time behavior beats a crash
+/// or a bogus lookup).
+DateTime _anchorToZone(DateTime from, RepeatRule rule) {
+  if (rule.followsLocalTime) return from;
+  final zoneId = rule.timezone;
+  if (zoneId == null) return from;
+  try {
+    final location = tz.getLocation(zoneId);
+    return tz.TZDateTime(
+      location,
+      from.year,
+      from.month,
+      from.day,
+      from.hour,
+      from.minute,
+      from.second,
+      from.millisecond,
+    );
+  } catch (_) {
+    // An unrecognized zone id (corrupt data, or a timezone database
+    // version mismatch across an app update) shouldn't crash Dismiss -
+    // falls back to local-time-for-this-one-advance rather than losing
+    // the reminder entirely.
+    return from;
+  }
+}
+
 /// Advances [from] (the [occurrenceNumber]th occurrence so far) to the
 /// next occurrence under [rule] that's still ahead of [now] (defaults to
 /// the real current time) - skipping past however many cycles have
@@ -347,7 +452,7 @@ bool _isPastEnd(RepeatRule rule, DateTime date, int occurrenceNumber) {
   DateTime? now,
 }) {
   final effectiveNow = now ?? DateTime.now();
-  var next = from;
+  var next = _anchorToZone(from, rule);
   var occurrence = occurrenceNumber;
   while (true) {
     next = _advanceOnce(next, rule);
