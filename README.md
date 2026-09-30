@@ -95,3 +95,42 @@ repo's README for deployment details.
 The app itself has no build-time knowledge of the backend's location -
 enter the server URL in the app's Settings -> Sync screen (see
 `lib/services/pb_service.dart`), same as on any other device.
+
+### Deployment: Docker container
+
+The homelab's PocketBase server runs as a Docker container (not the
+stock prebuilt PocketBase binary - `~/projects/homelab/pocketbase/`
+builds a custom Go program that embeds PocketBase, so app-specific
+packages under `apps/<app>/` can register Go-native hooks; jotes' own
+Web Push fan-out needs RFC 8291 encryption that a JS hook can't do). It's
+brought up via that repo's `docker-compose.yaml`:
+
+- Container name: `pocketbase`
+- Listens on `8090` (host and container)
+- Data directory (`pb_data`, the SQLite store): bind-mounted from the
+  host at `/mnt/alpha/jotes/pb_data`
+
+Useful commands when debugging a sync/notification issue from this
+machine (the homelab host, where the container actually runs):
+
+```sh
+docker ps --filter name=pocketbase          # confirm it's up
+docker logs pocketbase                       # full log history
+docker logs --since 1h pocketbase            # just recent activity
+docker logs -f pocketbase                    # follow live
+```
+
+PocketBase's own request log (each device's REST/realtime calls, with
+timestamps) is generally more useful for diagnosing a specific
+cross-device sync discrepancy than anything logged client-side - see the
+"Known gaps" note below.
+
+**Known gap:** the app itself does essentially no logging in its sync/
+notification code paths (`lib/services/sync_engine.dart`,
+`lib/services/notification_service.dart`,
+`lib/services/background_sync_service.dart`, `lib/services/pb_service.dart`
+- all currently have zero log statements). This makes a specific past
+incident (e.g. "why didn't reminder X arrive on device Y") difficult to
+reconstruct after the fact from either side. Adding structured logging to
+these paths would make future sync/notification issues far more
+diagnosable.

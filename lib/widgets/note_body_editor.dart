@@ -151,6 +151,67 @@ TextEditingValue toggleLineMarker({
   );
 }
 
+/// Wraps (or unwraps) [selection] in [marker] on both sides - the core
+/// logic behind the toolbar's Bold ("**") and Italic ("*") buttons (see
+/// NoteBodyEditorState.toggleBold/toggleItalic). If the text immediately
+/// surrounding [selection] already carries this exact marker, it's removed
+/// instead, so pressing the same button again toggles the formatting back
+/// off rather than doubling it up. A collapsed selection (just a cursor,
+/// nothing selected) gets an empty marker pair inserted with the cursor
+/// left in between, ready for the next typed characters to land
+/// already-wrapped.
+TextEditingValue toggleInlineMarker({
+  required String text,
+  required TextSelection selection,
+  required String marker,
+}) {
+  final start = selection.start;
+  final end = selection.end;
+  final markerLength = marker.length;
+
+  // Guards against matching in the middle of a longer run of the same
+  // marker character (e.g. italic's single "*" misfiring on a bold "**"
+  // pair's own boundary) - the character just outside the candidate marker
+  // must not itself be the same character, or this isn't really a
+  // standalone marker of this exact length.
+  bool isBareMarkerBoundary(int outerIndex) {
+    if (outerIndex < 0 || outerIndex >= text.length) return true;
+    return text[outerIndex] != marker[0];
+  }
+
+  final hasLeadingMarker =
+      start >= markerLength &&
+      text.substring(start - markerLength, start) == marker &&
+      isBareMarkerBoundary(start - markerLength - 1);
+  final hasTrailingMarker =
+      end + markerLength <= text.length &&
+      text.substring(end, end + markerLength) == marker &&
+      isBareMarkerBoundary(end + markerLength);
+
+  if (hasLeadingMarker && hasTrailingMarker) {
+    final newText = text
+        .replaceRange(end, end + markerLength, '')
+        .replaceRange(start - markerLength, start, '');
+    return TextEditingValue(
+      text: newText,
+      selection: TextSelection(
+        baseOffset: start - markerLength,
+        extentOffset: end - markerLength,
+      ),
+    );
+  }
+
+  final selected = text.substring(start, end);
+  final newText = text.replaceRange(start, end, '$marker$selected$marker');
+  return TextEditingValue(
+    text: newText,
+    selection: TextSelection(
+      baseOffset: start + markerLength,
+      extentOffset: start + markerLength + selected.length,
+    ),
+  );
+}
+
 /// Swaps the line containing [cursorOffset] in [text] with the adjacent
 /// line in [direction] (-1 for up, +1 for down) - the core logic behind
 /// the toolbar's move-line tools (see NoteBodyEditorState.moveLineUp/
@@ -1027,6 +1088,40 @@ class NoteBodyEditorState extends State<NoteBodyEditor> {
       direction: direction,
     );
     if (newValue == null) return;
+    _rawBody = newValue.text;
+    setState(() => _editController.value = newValue);
+    widget.onChanged(_rawBody);
+  }
+
+  /// Wraps the current selection in "**" (or removes it if already
+  /// wrapped) - see [toggleInlineMarker]. A no-op while not editing a
+  /// specific line, same reasoning as [moveLineUp]/[moveLineDown] - there's
+  /// no sensible "selection" to format without an active cursor. Exposed
+  /// for the toolbar's Bold button via `GlobalKey<NoteBodyEditorState>`.
+  void toggleBold() => _toggleInlineFormat('**');
+
+  /// Same as [toggleBold], but for italic ("*") - exposed for the
+  /// toolbar's Italic button.
+  void toggleItalic() => _toggleInlineFormat('*');
+
+  /// Same as [toggleBold], but for strikethrough ("~~") - exposed for the
+  /// toolbar's Strikethrough button.
+  void toggleStrikethrough() => _toggleInlineFormat('~~');
+
+  /// Same as [toggleBold], but for an inline code span ("`") - exposed for
+  /// the toolbar's Code button.
+  void toggleCode() => _toggleInlineFormat('`');
+
+  void _toggleInlineFormat(String marker) {
+    if (_mode != _Mode.edit) return;
+    final selection = _editController.selection;
+    if (!selection.isValid) return;
+
+    final newValue = toggleInlineMarker(
+      text: _editController.text,
+      selection: selection,
+      marker: marker,
+    );
     _rawBody = newValue.text;
     setState(() => _editController.value = newValue);
     widget.onChanged(_rawBody);

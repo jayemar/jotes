@@ -27,6 +27,8 @@ import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.width
+import androidx.glance.text.FontFamily
+import androidx.glance.text.FontStyle
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextDecoration
@@ -41,11 +43,11 @@ private sealed class BodyBlock {
   data class Checklist(
       val checked: Boolean,
       val text: String,
-      val isLink: Boolean,
+      val style: String,
       val indent: Int,
   ) : BodyBlock()
 
-  data class PlainText(val text: String, val isLink: Boolean) : BodyBlock()
+  data class PlainText(val text: String, val style: String, val indent: Int) : BodyBlock()
 }
 
 /**
@@ -53,11 +55,12 @@ private sealed class BodyBlock {
  * already parsed via parseBody - re-parsing the raw "- [ ] "/"- [x] "
  * markdown syntax here in Kotlin too would mean two independent
  * implementations of the same regex to keep in sync. Same reasoning for
- * `isLink`/link-syntax stripping (see WidgetService's own comment on
- * buildSingleNoteJson) - Glance can't render a mixed-style line at all, so
- * `text` has already been reduced to just its display label on the Dart
- * side, and `isLink` says whether that whole block is nothing but a link
- * (the only case worth styling specially here - see WidgetContent).
+ * `style`/markdown-syntax stripping (see WidgetService's own comment on
+ * _styledText) - Glance can't render a mixed-style line at all, so `text`
+ * has already been reduced to a fully plain string on the Dart side, and
+ * `style` says the one way (if any) this whole block can still be styled -
+ * "link"/"bold"/"italic"/"strikethrough"/"code", or "plain" for none (see
+ * [previewTextStyle]).
  */
 private fun parseBlocks(json: JSONObject): List<BodyBlock> {
   val array = json.optJSONArray("blocks") ?: return emptyList()
@@ -68,34 +71,49 @@ private fun parseBlocks(json: JSONObject): List<BodyBlock> {
           BodyBlock.Checklist(
               checked = obj.optBoolean("checked", false),
               text = obj.optString("text", ""),
-              isLink = obj.optBoolean("isLink", false),
+              style = obj.optString("style", "plain"),
               indent = obj.optInt("indent", 0),
           )
       "text" ->
           BodyBlock.PlainText(
               text = obj.optString("text", ""),
-              isLink = obj.optBoolean("isLink", false),
+              style = obj.optString("style", "plain"),
+              indent = obj.optInt("indent", 0),
           )
       else -> null
     }
   }
 }
 
-/** Link-blue + underline when [isLink], the normal note text color otherwise. */
+/**
+ * The [TextStyle] for one of [BodyBlock]'s own `style` values - link-blue
+ * + underline for "link", bold/italic/line-through/monospace for their own
+ * matching value, or just the normal note text color for "plain". A
+ * checked checklist item's own strikethrough (regardless of [style])
+ * still combines in via [checked], the same as buildLinkSpans' own
+ * combined decoration does in-app - Glance's TextDecoration has no
+ * "combine" helper of its own, so a checked+link/strikethrough-styled item
+ * (the only two `style` values [checked] could otherwise clash with)
+ * favors the checked strikethrough, matching how a checked item always
+ * reads as "done" regardless of what it says.
+ */
 private fun previewTextStyle(
-    isLink: Boolean,
+    style: String,
     fontSize: TextUnit,
-    strikethrough: Boolean = false,
+    checked: Boolean = false,
 ): TextStyle {
   val decoration = when {
-    strikethrough -> TextDecoration.LineThrough
-    isLink -> TextDecoration.Underline
+    checked || style == "strikethrough" -> TextDecoration.LineThrough
+    style == "link" -> TextDecoration.Underline
     else -> TextDecoration.None
   }
   return TextStyle(
-      color = if (isLink) linkColorProvider else noteTextColorProvider,
+      color = if (style == "link") linkColorProvider else noteTextColorProvider,
       fontSize = fontSize,
+      fontWeight = if (style == "bold") FontWeight.Bold else FontWeight.Normal,
+      fontStyle = if (style == "italic") FontStyle.Italic else FontStyle.Normal,
       textDecoration = decoration,
+      fontFamily = if (style == "code") FontFamily.Monospace else null,
   )
 }
 
@@ -199,10 +217,19 @@ class SingleNoteWidget : GlanceAppWidget() {
                 Text(
                     text = block.text,
                     maxLines = 2,
-                    style = previewTextStyle(isLink = block.isLink, fontSize = 16.sp),
+                    style = previewTextStyle(style = block.style, fontSize = 16.sp),
                     modifier = GlanceModifier
                         .fillMaxWidth()
-                        .padding(top = 2.dp, bottom = 2.dp)
+                        // Same indent treatment as ChecklistPreviewRow's own
+                        // start-padding - a bulleted/numbered sub-item
+                        // previously rendered flush with its top-level
+                        // parent, since this block type carried no indent
+                        // at all until WidgetService started including it.
+                        .padding(
+                            start = (block.indent * 12).dp,
+                            top = 2.dp,
+                            bottom = 2.dp,
+                        )
                         .clickable(openNote),
                 )
           }
@@ -241,9 +268,9 @@ class SingleNoteWidget : GlanceAppWidget() {
           text = block.text,
           maxLines = 1,
           style = previewTextStyle(
-              isLink = block.isLink,
+              style = block.style,
               fontSize = 16.sp,
-              strikethrough = block.checked,
+              checked = block.checked,
           ),
       )
     }

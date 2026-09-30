@@ -140,7 +140,10 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     return Note(
       id: _noteId,
       title: _titleCtrl.text.trim(),
-      body: _currentBody.trim(),
+      // trimRight, not trim - a leading blank line is something the user
+      // deliberately typed (e.g. to push the first real line down), so only
+      // trailing whitespace (autosave/newline artifacts) gets stripped.
+      body: _currentBody.trimRight(),
       colorIndex: _colorIndex,
       reminderAt: _reminderAt,
       created: existing?.created ?? now,
@@ -825,11 +828,12 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
 
   /// Builds one bottom-toolbar icon button for [tool] - which
   /// NoteBodyEditorState method it calls and whether it's currently
-  /// enabled both follow directly from [tool] itself; only moveUp/
-  /// moveDown/cutLine/paste/undo can be disabled (each needs an active
-  /// cursor, or - for undo - something to actually undo), matching
-  /// exactly how these tools already behaved before becoming
-  /// user-reorderable/hideable (see NoteToolbarTool).
+  /// enabled both follow directly from [tool] itself; only bold/italic/
+  /// strikethrough/code/moveUp/moveDown/cutLine/paste/undo/insertNoteLink
+  /// can be disabled (each needs an active cursor, or - for undo -
+  /// something to actually undo), matching exactly how these tools
+  /// already behaved before becoming user-reorderable/hideable (see
+  /// NoteToolbarTool).
   Widget _toolButton(NoteToolbarTool tool, Color textColor) {
     final isEditing = _bodyEditorKey.currentState?.isEditingBody == true;
     final VoidCallback? onPressed = switch (tool) {
@@ -837,6 +841,16 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         () => _bodyEditorKey.currentState?.toggleChecklistLine(),
       NoteToolbarTool.bullet =>
         () => _bodyEditorKey.currentState?.toggleBulletLine(),
+      NoteToolbarTool.bold =>
+        isEditing ? () => _bodyEditorKey.currentState?.toggleBold() : null,
+      NoteToolbarTool.italic =>
+        isEditing ? () => _bodyEditorKey.currentState?.toggleItalic() : null,
+      NoteToolbarTool.strikethrough =>
+        isEditing
+            ? () => _bodyEditorKey.currentState?.toggleStrikethrough()
+            : null,
+      NoteToolbarTool.code =>
+        isEditing ? () => _bodyEditorKey.currentState?.toggleCode() : null,
       NoteToolbarTool.moveUp =>
         isEditing ? () => _bodyEditorKey.currentState?.moveLineUp() : null,
       NoteToolbarTool.moveDown =>

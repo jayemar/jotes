@@ -11,6 +11,7 @@ import '../widgets/note_body_editor.dart'
         NumberedBodyBlock,
         TextBodyBlock,
         parseBody;
+import '../widgets/note_inline_format.dart';
 import '../widgets/note_links.dart';
 
 const _singleNoteReceiver = 'com.jayemar.jotes.SingleNoteWidgetReceiver';
@@ -150,43 +151,75 @@ class WidgetService {
     ChecklistBodyBlock() => {
       'type': 'checklist',
       'checked': block.checked,
-      ..._linkAwareText(block.text),
+      ..._styledText(block.text),
       'indent': block.indent,
     },
     // SingleNoteWidget.kt only knows "checklist"/"text" (see parseBlocks
     // there) - a plain bullet/numbered item isn't worth a third native
     // block type just for the home-screen widget, so its marker is folded
-    // back into the displayed text (raw "- "/"N. ", same as before this
-    // block type existed) rather than either crashing on an unrecognized
-    // type or silently dropping the line. This does mean a bulleted/
-    // numbered line that's otherwise nothing but a bare link loses the
-    // in-app "whole line is a link" styling in the widget specifically,
-    // since the marker prefix means _linkAwareText's isLink check no
-    // longer sees the *entire* text as just a link.
-    BulletBodyBlock() => {'type': 'text', ..._linkAwareText('- ${block.text}')},
+    // back into the displayed text instead of either crashing on an
+    // unrecognized type or silently dropping the line. A bullet uses the
+    // same "•" glyph note_card.dart/note_body_view.dart's own in-app
+    // preview shows, not the raw "- " markdown syntax the note's body
+    // carries - showing the literal hyphen was the actual bug this
+    // replaced (a bullet is not itself something WidgetService otherwise
+    // "supports" rendering, unlike checklist items, if it's left looking
+    // like unrendered markdown). `indent` still carries through as its own
+    // field (not folded into the text like the marker is) so Kotlin can
+    // apply the same start-padding treatment the checklist row above
+    // already gets. This does mean a bulleted/numbered line that's
+    // otherwise nothing but a bare link loses the in-app "whole line is a
+    // link" styling in the widget specifically, since the marker prefix
+    // means _styledText's whole-link check no longer sees the *entire*
+    // text as just a link.
+    BulletBodyBlock() => {
+      'type': 'text',
+      ..._styledText('• ${block.text}'),
+      'indent': block.indent,
+    },
     NumberedBodyBlock() => {
       'type': 'text',
-      ..._linkAwareText('${block.number}. ${block.text}'),
+      ..._styledText('${block.number}. ${block.text}'),
+      'indent': block.indent,
     },
-    TextBodyBlock() => {'type': 'text', ..._linkAwareText(block.text)},
+    TextBodyBlock() => {'type': 'text', ..._styledText(block.text)},
   };
 
-  /// Markdown links can't render as true inline styled/clickable spans in
+  /// Markdown links and inline formatting (`**bold**`/`*italic*`/
+  /// `~~strike~~`/`` `code` ``) can't render as true mixed-style spans in
   /// the Android widget - Jetpack Glance's Text only takes one plain
   /// String + one TextStyle per call (no AnnotatedString/TextSpan
   /// equivalent), and RemoteViews has no span-level click target at all,
-  /// only whole-view clicks (see SingleNoteWidget.kt) - so this strips
-  /// link syntax down to just its display label (matching what
-  /// buildLinkSpans shows in-app) always, and additionally flags whether
-  /// the *entire* text is nothing but a single link, the one case Kotlin
-  /// can still style as a whole (link-blue, underlined) rather than
-  /// leaving raw "[label](url)"/bare URLs looking like oddly-formatted
-  /// plain text.
-  static Map<String, dynamic> _linkAwareText(String text) {
-    final segments = parseLinks(text);
-    return {
-      'text': segments.map((s) => s.text).join(),
-      'isLink': segments.length == 1 && segments.single.isLink,
-    };
+  /// only whole-view clicks (see SingleNoteWidget.kt). So [text] is always
+  /// reduced to a fully plain string first - link syntax down to each
+  /// link's own display label (matching what buildLinkSpans shows
+  /// in-app), then any remaining formatting markers stripped too - and
+  /// 'style' says the one way (if any) Kotlin can still style the whole
+  /// block: 'link' when [text] was nothing but a single link (the
+  /// existing, most-valuable case - kept taking priority over inline
+  /// formatting, since a linked *and* bold run in the same block is rare
+  /// enough not to chase), 'bold'/'italic'/'strikethrough'/'code' when
+  /// what's left after link-stripping is nothing but a single one of
+  /// those formatted runs (see [InlineFormat]), or 'plain' otherwise (a
+  /// mix of formatting/plain text, or none at all) - still fully
+  /// markdown-punctuation-free even though no particular style applies to
+  /// the whole line.
+  static Map<String, dynamic> _styledText(String text) {
+    final linkSegments = parseLinks(text);
+    if (linkSegments.length == 1 && linkSegments.single.isLink) {
+      return {'text': linkSegments.single.text, 'style': 'link'};
+    }
+
+    final linkStripped = linkSegments.map((s) => s.text).join();
+    final formatSegments = parseInlineFormatting(linkStripped);
+    final nonEmpty = formatSegments.where((s) => s.text.isNotEmpty).toList();
+    if (nonEmpty.length == 1 && nonEmpty.single.formats.isNotEmpty) {
+      return {
+        'text': nonEmpty.single.text,
+        'style': nonEmpty.single.formats.single.name,
+      };
+    }
+
+    return {'text': formatSegments.map((s) => s.text).join(), 'style': 'plain'};
   }
 }

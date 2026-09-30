@@ -13,6 +13,10 @@ const _hiddenPrefsKey = 'note_toolbar_hidden';
 enum NoteToolbarTool {
   checklist(Icons.check_box_outlined, 'Toggle checklist item'),
   bullet(Icons.format_list_bulleted_outlined, 'Toggle list item'),
+  bold(Icons.format_bold, 'Bold'),
+  italic(Icons.format_italic, 'Italic'),
+  strikethrough(Icons.format_strikethrough, 'Strikethrough'),
+  code(Icons.code, 'Code'),
   moveUp(Icons.arrow_upward_outlined, 'Move line up'),
   moveDown(Icons.arrow_downward_outlined, 'Move line down'),
   cutLine(Icons.content_cut, 'Cut line'),

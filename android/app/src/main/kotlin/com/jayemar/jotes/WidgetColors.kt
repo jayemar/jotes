@@ -36,9 +36,10 @@ val noteTextColorProvider: GlanceColorProvider =
 // linkColor (Colors.blue / Colors.lightBlueAccent) - see its comment for
 // why this doesn't derive from the note's own background color. Used by
 // SingleNoteWidget for a block whose entire text is a single markdown/bare
-// URL link - see WidgetService.buildSingleNoteJson's isLink flag and
-// SingleNoteWidget.kt's own comment for why only a *whole* block, never
-// just part of a mixed line, can be styled this way here.
+// URL link - see WidgetService.buildSingleNoteJson's _styledText helper
+// (its `style: 'link'` case) and SingleNoteWidget.kt's own comment for why
+// only a *whole* block, never just part of a mixed line, can be styled
+// this way here.
 val linkColorProvider: GlanceColorProvider =
     ColorProvider(day = Color(0xFF2196F3), night = Color(0xFF40C4FF))
 

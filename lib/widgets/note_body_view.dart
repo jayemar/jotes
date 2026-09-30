@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 
@@ -13,6 +15,15 @@ import 'note_body_editor.dart'
         maxChecklistIndent,
         parseBodyWithOffsets;
 import 'note_link_spans.dart';
+
+/// How long a checked-off item stays put, still visibly showing its new
+/// checked state, before actually sinking to the bottom of its checklist
+/// run - see _ChecklistViewRowState._handleToggleTap. Long enough that the
+/// tap's own result (checkbox filled in, text struck through) is clearly
+/// visible before the item jumps away, matching the reasoning Keep's own
+/// "check, pause, then sink" behavior already relies on; short enough not
+/// to feel like a stuck tap.
+const checklistToggleCommitDelay = Duration(milliseconds: 450);
 
 /// One block as rendered in view mode - wraps a [ParsedBlock] with a
 /// [GlobalKey] used only for the duration of a single drag gesture (see
@@ -167,13 +178,14 @@ class NoteBodyView extends StatelessWidget {
           }
           final viewBlock = viewBlocks[segment.start];
           return switch (viewBlock.block) {
-            BulletBodyBlock(:final text, :final indent) => _buildListMarkerBlock(
-              context,
-              viewBlock,
-              marker: '•',
-              text: text,
-              indent: indent,
-            ),
+            BulletBodyBlock(:final text, :final indent) =>
+              _buildListMarkerBlock(
+                context,
+                viewBlock,
+                marker: '•',
+                text: text,
+                indent: indent,
+              ),
             NumberedBodyBlock(:final number, :final text, :final indent) =>
               _buildListMarkerBlock(
                 context,
@@ -391,7 +403,8 @@ class _ChecklistViewRow extends StatefulWidget {
   State<_ChecklistViewRow> createState() => _ChecklistViewRowState();
 }
 
-class _ChecklistViewRowState extends State<_ChecklistViewRow> {
+class _ChecklistViewRowState extends State<_ChecklistViewRow>
+    with SingleTickerProviderStateMixin {
   // Non-zero only while a drag is actively in progress, so the row can
   // live-preview its new indent as soon as it's dragged, before the drag
   // ends and the change actually commits.
@@ -399,6 +412,95 @@ class _ChecklistViewRowState extends State<_ChecklistViewRow> {
   double _dragDx = 0;
   double _dragDy = 0;
   final GlobalKey _textKey = GlobalKey();
+
+  // The checked state actually shown while a toggle is pending commit (see
+  // _handleToggleTap) - null once there's nothing pending, meaning the
+  // real widget.viewBlock.block.checked is shown directly. Overriding the
+  // *display* rather than committing immediately is what buys the pause
+  // before the item sinks to the bottom of its run: the checkbox/text
+  // already show the new state, but the actual reorder (and the jump that
+  // comes with it) waits for [_pendingCommitTimer].
+  bool? _displayCheckedOverride;
+  Timer? _pendingCommitTimer;
+
+  // A brief scale pulse on tap, independent of the commit delay above -
+  // concrete, immediate confirmation that this exact checkbox registered
+  // the tap, which is the other half of what made a fast sink-to-bottom
+  // feel uncertain (was that even the row I meant to tap?).
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseScale;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _pulseScale = TweenSequence<double>(
+      [
+        TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.35), weight: 1),
+        TweenSequenceItem(tween: Tween(begin: 1.35, end: 1.0), weight: 1),
+      ],
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeOut));
+  }
+
+  @override
+  void dispose() {
+    // Loses whatever toggle is still pending rather than force-committing
+    // it - same tradeoff note_editor_screen.dart's own autosave timer
+    // already makes on dispose, and for the same reason: this row is gone
+    // (note closed, or view mode torn down) well before the short delay
+    // above would elapse in any normal tap, so there's nothing meaningful
+    // left to flush.
+    _pendingCommitTimer?.cancel();
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  /// The checked state to actually display - the real, current value
+  /// unless a not-yet-committed toggle (see [_displayCheckedOverride])
+  /// says otherwise.
+  bool _displayChecked(ChecklistBodyBlock block) =>
+      _displayCheckedOverride ?? block.checked;
+
+  /// Handles a tap on this row's checkbox - see the class-level doc
+  /// comments on [_displayCheckedOverride]/[_pulseController] for the two
+  /// things this does: an immediate visual pulse + display flip (so the
+  /// tap itself is unmistakable), and a delayed commit of the real toggle
+  /// (so the resulting sink-to-bottom reorder doesn't happen until well
+  /// after that's visible). Tapping again before the delay elapses cancels
+  /// whatever was pending - if that lands back on the real, current
+  /// checked state, there's nothing left to commit at all, the same as if
+  /// neither tap had happened; otherwise a fresh delay starts for the new
+  /// (still-uncommitted) state. This mirrors toggleLineMarker/toggleInline
+  /// Marker's own "the latest state wins" reasoning elsewhere in this
+  /// editor, just applied to a debounced commit instead of an immediate
+  /// one.
+  void _handleToggleTap() {
+    final block = widget.viewBlock.block as ChecklistBodyBlock;
+    _pulseController.forward(from: 0);
+    _pendingCommitTimer?.cancel();
+
+    final newDisplay = !_displayChecked(block);
+    if (newDisplay == block.checked) {
+      setState(() => _displayCheckedOverride = null);
+      return;
+    }
+
+    setState(() => _displayCheckedOverride = newDisplay);
+    _pendingCommitTimer = Timer(checklistToggleCommitDelay, () {
+      if (!mounted) return;
+      // Cleared *before* the real toggle commits, not after - once
+      // widget.onToggle() below runs, this row's key may end up matching a
+      // completely different block after the resulting reorder (checking
+      // sinks the item to the bottom of its run), and that block's own
+      // ground-truth checked state - not this now-stale override - is
+      // what belongs on display then.
+      setState(() => _displayCheckedOverride = null);
+      widget.onToggle();
+    });
+  }
 
   void _onDragStarted() {
     setState(() {
@@ -490,6 +592,8 @@ class _ChecklistViewRowState extends State<_ChecklistViewRow> {
       ),
     );
 
+    final displayChecked = _displayChecked(block);
+
     return Padding(
       key: widget.viewBlock.rowKey,
       padding: EdgeInsets.only(left: liveIndentPx),
@@ -501,10 +605,13 @@ class _ChecklistViewRowState extends State<_ChecklistViewRow> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           handle,
-          Checkbox(
-            value: block.checked,
-            onChanged: (_) => widget.onToggle(),
-            visualDensity: VisualDensity.compact,
+          ScaleTransition(
+            scale: _pulseScale,
+            child: Checkbox(
+              value: displayChecked,
+              onChanged: (_) => _handleToggleTap(),
+              visualDensity: VisualDensity.compact,
+            ),
           ),
           Expanded(
             child: Padding(
@@ -526,10 +633,10 @@ class _ChecklistViewRowState extends State<_ChecklistViewRow> {
                             text: block.text,
                             baseStyle: TextStyle(
                               fontSize: 15,
-                              color: block.checked
+                              color: displayChecked
                                   ? widget.hintColor
                                   : widget.textColor,
-                              decoration: block.checked
+                              decoration: displayChecked
                                   ? TextDecoration.lineThrough
                                   : null,
                             ),

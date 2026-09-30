@@ -26,6 +26,11 @@ void main() {
     await _pumpScreen(tester);
 
     for (final tool in NoteToolbarTool.values) {
+      // The list is a lazily-built ReorderableListView.builder - with
+      // enough tools defined to overflow the test viewport, a later one
+      // (e.g. Insert note link) isn't actually built yet without first
+      // scrolling it into view, unlike a plain eagerly-built Column.
+      await tester.scrollUntilVisible(find.text(tool.label), 200);
       expect(find.text(tool.label), findsOneWidget);
       expect(find.byIcon(tool.icon), findsOneWidget);
     }
@@ -68,9 +73,13 @@ void main() {
     await _pumpScreen(tester);
 
     for (final tool in NoteToolbarTool.values) {
-      final switchWidget = tester.widget<Switch>(
-        find.byKey(Key('note_toolbar_visibility_${tool.name}')),
+      final switchFinder = find.byKey(
+        Key('note_toolbar_visibility_${tool.name}'),
       );
+      // See the same scroll-into-view reasoning in the "lists every tool"
+      // test above.
+      await tester.scrollUntilVisible(switchFinder, 200);
+      final switchWidget = tester.widget<Switch>(switchFinder);
       expect(switchWidget.value, isTrue);
     }
   });
@@ -106,9 +115,13 @@ void main() {
           .setHidden(NoteToolbarTool.undo, true);
       await tester.pumpAndSettle();
 
-      await tester.tap(
-        find.byKey(const Key('note_toolbar_visibility_undo')),
+      final switchFinder = find.byKey(
+        const Key('note_toolbar_visibility_undo'),
       );
+      // See the same scroll-into-view reasoning in the "lists every tool"
+      // test above.
+      await tester.scrollUntilVisible(switchFinder, 200);
+      await tester.tap(switchFinder);
       await tester.pumpAndSettle();
 
       expect(

@@ -63,20 +63,22 @@ void main() {
       expect(state.hidden, {NoteToolbarTool.paste});
     });
 
-    test('setHidden toggles a tool\'s visibility without touching order',
-        () async {
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
-      final notifier = container.read(noteToolbarProvider.notifier);
+    test(
+      'setHidden toggles a tool\'s visibility without touching order',
+      () async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(noteToolbarProvider.notifier);
 
-      await notifier.setHidden(NoteToolbarTool.moveUp, true);
-      expect(container.read(noteToolbarProvider).hidden, {
-        NoteToolbarTool.moveUp,
-      });
+        await notifier.setHidden(NoteToolbarTool.moveUp, true);
+        expect(container.read(noteToolbarProvider).hidden, {
+          NoteToolbarTool.moveUp,
+        });
 
-      await notifier.setHidden(NoteToolbarTool.moveUp, false);
-      expect(container.read(noteToolbarProvider).hidden, isEmpty);
-    });
+        await notifier.setHidden(NoteToolbarTool.moveUp, false);
+        expect(container.read(noteToolbarProvider).hidden, isEmpty);
+      },
+    );
 
     test('choices persist for a freshly-built notifier', () async {
       final container1 = ProviderContainer();
@@ -111,70 +113,66 @@ void main() {
         NoteToolbarTool.moveUp,
         NoteToolbarTool.moveDown,
         // Not part of the persisted order above - appended automatically
-        // (see _resolveOrder) as a tool that postdates it.
+        // (see _resolveOrder) as tools that postdate it, in their own
+        // enum declaration order.
+        NoteToolbarTool.bold,
+        NoteToolbarTool.italic,
+        NoteToolbarTool.strikethrough,
+        NoteToolbarTool.code,
         NoteToolbarTool.insertNoteLink,
       ]);
       expect(state.hidden, {NoteToolbarTool.moveDown});
     });
 
-    test(
-      'a persisted order missing a tool the app now defines appends it '
-      'at the end, rather than silently dropping it from the toolbar '
-      'entirely',
-      () async {
-        SharedPreferences.setMockInitialValues({
-          'note_toolbar_order': NoteToolbarTool.values
-              .where((t) => t != NoteToolbarTool.paste)
-              .map((t) => t.name)
-              .toList(),
-        });
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        container.read(noteToolbarProvider);
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+    test('a persisted order missing a tool the app now defines appends it '
+        'at the end, rather than silently dropping it from the toolbar '
+        'entirely', () async {
+      SharedPreferences.setMockInitialValues({
+        'note_toolbar_order': NoteToolbarTool.values
+            .where((t) => t != NoteToolbarTool.paste)
+            .map((t) => t.name)
+            .toList(),
+      });
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      container.read(noteToolbarProvider);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
-        final state = container.read(noteToolbarProvider);
-        expect(state.order.last, NoteToolbarTool.paste);
-        expect(state.order.toSet(), NoteToolbarTool.values.toSet());
-      },
-    );
+      final state = container.read(noteToolbarProvider);
+      expect(state.order.last, NoteToolbarTool.paste);
+      expect(state.order.toSet(), NoteToolbarTool.values.toSet());
+    });
 
-    test(
-      'a persisted order naming a tool the app no longer defines drops '
-      'it silently, rather than crashing',
-      () async {
-        SharedPreferences.setMockInitialValues({
-          'note_toolbar_order': [
-            'someRemovedTool',
-            ...NoteToolbarTool.values.map((t) => t.name),
-          ],
-        });
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        container.read(noteToolbarProvider);
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+    test('a persisted order naming a tool the app no longer defines drops '
+        'it silently, rather than crashing', () async {
+      SharedPreferences.setMockInitialValues({
+        'note_toolbar_order': [
+          'someRemovedTool',
+          ...NoteToolbarTool.values.map((t) => t.name),
+        ],
+      });
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      container.read(noteToolbarProvider);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
-        final state = container.read(noteToolbarProvider);
-        expect(state.order.toSet(), NoteToolbarTool.values.toSet());
-        expect(state.order, hasLength(NoteToolbarTool.values.length));
-      },
-    );
+      final state = container.read(noteToolbarProvider);
+      expect(state.order.toSet(), NoteToolbarTool.values.toSet());
+      expect(state.order, hasLength(NoteToolbarTool.values.length));
+    });
 
-    test(
-      'a persisted hidden entry naming a tool the app no longer defines '
-      'is dropped silently too',
-      () async {
-        SharedPreferences.setMockInitialValues({
-          'note_toolbar_hidden': ['someRemovedTool', 'undo'],
-        });
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        container.read(noteToolbarProvider);
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+    test('a persisted hidden entry naming a tool the app no longer defines '
+        'is dropped silently too', () async {
+      SharedPreferences.setMockInitialValues({
+        'note_toolbar_hidden': ['someRemovedTool', 'undo'],
+      });
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      container.read(noteToolbarProvider);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
-        final state = container.read(noteToolbarProvider);
-        expect(state.hidden, {NoteToolbarTool.undo});
-      },
-    );
+      final state = container.read(noteToolbarProvider);
+      expect(state.hidden, {NoteToolbarTool.undo});
+    });
   });
 }

@@ -204,7 +204,7 @@ void main() {
         'title': 'Title',
         'body': 'Body text',
         'blocks': [
-          {'type': 'text', 'text': 'Body text', 'isLink': false},
+          {'type': 'text', 'text': 'Body text', 'style': 'plain'},
         ],
         'colorIndex': 4,
         'reminderAtMillis': reminderAt.millisecondsSinceEpoch,
@@ -230,45 +230,64 @@ void main() {
       final json = WidgetService.buildSingleNoteJson(note);
 
       expect(json['blocks'], [
-        {'type': 'text', 'text': 'Intro', 'isLink': false},
+        {'type': 'text', 'text': 'Intro', 'style': 'plain'},
         {
           'type': 'checklist',
           'checked': false,
           'text': 'Buy milk',
-          'isLink': false,
+          'style': 'plain',
           'indent': 0,
         },
         {
           'type': 'checklist',
           'checked': true,
           'text': 'Sub-item',
-          'isLink': false,
+          'style': 'plain',
           'indent': 1,
         },
       ]);
     });
 
-    test('folds a plain bullet/numbered item back into a "text" block with '
-        'its raw marker, rather than crashing or silently dropping the '
-        'line - SingleNoteWidget.kt only knows "checklist"/"text" block '
-        'types (see the comment on _blockJson)', () {
-      final note = _note(
-        id: 'note-1',
-        body: '- Bread\n1. Preheat oven',
-      );
+    test('folds a plain bullet item back into a "text" block using the '
+        'same "•" glyph the in-app preview shows, not the raw "- " '
+        'markdown syntax - a numbered item keeps its own literal number, '
+        'same as in-app', () {
+      final note = _note(id: 'note-1', body: '- Bread\n1. Preheat oven');
 
       final json = WidgetService.buildSingleNoteJson(note);
 
       expect(json['blocks'], [
-        {'type': 'text', 'text': '- Bread', 'isLink': false},
-        {'type': 'text', 'text': '1. Preheat oven', 'isLink': false},
+        {'type': 'text', 'text': '• Bread', 'style': 'plain', 'indent': 0},
+        {
+          'type': 'text',
+          'text': '1. Preheat oven',
+          'style': 'plain',
+          'indent': 0,
+        },
+      ]);
+    });
+
+    test('a bullet/numbered sub-item keeps its indent, so it renders at the '
+        'same visual level as it does in-app rather than flush with its '
+        'top-level parent', () {
+      final note = _note(
+        id: 'note-1',
+        body: '- Groceries\n  - Bread\n  1. Preheat oven',
+      );
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect((json['blocks'] as List).map((b) => (b as Map)['indent']), [
+        0,
+        1,
+        1,
       ]);
     });
 
     test('a text block that is entirely a link has its markdown syntax '
-        'stripped to just the label, and isLink set - the widget can style '
-        'the whole block as a link since Glance has no way to style just '
-        'part of one', () {
+        'stripped to just the label, and style set to "link" - the widget '
+        'can style the whole block as a link since Glance has no way to '
+        'style just part of one', () {
       final note = _note(
         id: 'note-1',
         body: '[jotes repo](https://example.com/jotes)',
@@ -277,14 +296,13 @@ void main() {
       final json = WidgetService.buildSingleNoteJson(note);
 
       expect(json['blocks'], [
-        {'type': 'text', 'text': 'jotes repo', 'isLink': true},
+        {'type': 'text', 'text': 'jotes repo', 'style': 'link'},
       ]);
     });
 
     test('a text block mixing a link with surrounding prose still has the '
-        'markdown stripped to its label, but isLink stays false - Glance '
-        'cannot color/underline just the link portion of a mixed line',
-        () {
+        'markdown stripped to its label, but style stays "plain" - Glance '
+        'cannot color/underline just the link portion of a mixed line', () {
       final note = _note(
         id: 'note-1',
         body: 'See https://example.com for more.',
@@ -296,7 +314,80 @@ void main() {
         {
           'type': 'text',
           'text': 'See https://example.com for more.',
-          'isLink': false,
+          'style': 'plain',
+        },
+      ]);
+    });
+
+    test('a text block that is entirely bold has its markdown syntax '
+        'stripped and style set to "bold"', () {
+      final note = _note(id: 'note-1', body: '**Important**');
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {'type': 'text', 'text': 'Important', 'style': 'bold'},
+      ]);
+    });
+
+    test('a text block that is entirely italic has its markdown syntax '
+        'stripped and style set to "italic"', () {
+      final note = _note(id: 'note-1', body: '*aside*');
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {'type': 'text', 'text': 'aside', 'style': 'italic'},
+      ]);
+    });
+
+    test('a text block that is entirely strikethrough has its markdown '
+        'syntax stripped and style set to "strikethrough"', () {
+      final note = _note(id: 'note-1', body: '~~done~~');
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {'type': 'text', 'text': 'done', 'style': 'strikethrough'},
+      ]);
+    });
+
+    test('a text block that is entirely inline code has its markdown '
+        'syntax stripped and style set to "code"', () {
+      final note = _note(id: 'note-1', body: '`flutter test`');
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {'type': 'text', 'text': 'flutter test', 'style': 'code'},
+      ]);
+    });
+
+    test('a text block mixing formatted and plain text has its markdown '
+        'syntax stripped entirely, but style stays "plain" - Glance cannot '
+        'style just part of a line', () {
+      final note = _note(id: 'note-1', body: 'This is **bold** and *italic*');
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {'type': 'text', 'text': 'This is bold and italic', 'style': 'plain'},
+      ]);
+    });
+
+    test('a checklist item that is entirely bold is styled as such, not '
+        'left showing literal asterisks', () {
+      final note = _note(id: 'note-1', body: '- [ ] **Urgent**');
+
+      final json = WidgetService.buildSingleNoteJson(note);
+
+      expect(json['blocks'], [
+        {
+          'type': 'checklist',
+          'checked': false,
+          'text': 'Urgent',
+          'style': 'bold',
+          'indent': 0,
         },
       ]);
     });

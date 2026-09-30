@@ -62,12 +62,28 @@ Future<ProviderContainer> _pumpRemindersScreen(
   return container;
 }
 
+Future<void> pickRecurrenceFilter(WidgetTester tester, String label) async {
+  await tester.tap(find.byKey(const Key('reminders_recurrence_filter')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
+}
+
+Future<void> pickStatusFilter(WidgetTester tester, String label) async {
+  await tester.tap(find.byKey(const Key('reminders_status_filter')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('the drawer has a Reminders item that opens RemindersScreen', (
     tester,
   ) async {
     final container = ProviderContainer(
-      overrides: [notesProvider.overrideWith(() => _FakeNotesNotifier(const []))],
+      overrides: [
+        notesProvider.overrideWith(() => _FakeNotesNotifier(const [])),
+      ],
     );
     addTearDown(container.dispose);
     await tester.pumpWidget(
@@ -120,9 +136,7 @@ void main() {
       ]);
 
       expect(find.text('Already handled'), findsNothing);
-      final tiles = tester
-          .widgetList<ListTile>(find.byType(ListTile))
-          .toList();
+      final tiles = tester.widgetList<ListTile>(find.byType(ListTile)).toList();
       expect(tiles, hasLength(2));
       // Oldest (overdue) first.
       expect((tiles[0].title as Text).data, 'Overdue');
@@ -208,23 +222,191 @@ void main() {
     expect(find.byIcon(Icons.repeat), findsOneWidget);
   });
 
+  group('the recurrence filter', () {
+    testWidgets(
+      'defaults to showing both recurring and single-fire reminders',
+      (tester) async {
+        final now = DateTime.now();
+        await _pumpRemindersScreen(tester, [
+          _note(
+            id: 'repeating',
+            title: 'Repeating',
+            reminderAt: now.add(const Duration(hours: 1)),
+            repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+          ),
+          _note(
+            id: 'once',
+            title: 'Once',
+            reminderAt: now.add(const Duration(hours: 2)),
+          ),
+        ]);
+
+        expect(find.text('Repeating'), findsOneWidget);
+        expect(find.text('Once'), findsOneWidget);
+      },
+    );
+
+    testWidgets('choosing "Recurring only" hides single-fire reminders', (
+      tester,
+    ) async {
+      final now = DateTime.now();
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'repeating',
+          title: 'Repeating',
+          reminderAt: now.add(const Duration(hours: 1)),
+          repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+        ),
+        _note(
+          id: 'once',
+          title: 'Once',
+          reminderAt: now.add(const Duration(hours: 2)),
+        ),
+      ]);
+
+      await pickRecurrenceFilter(tester, 'Recurring only');
+
+      expect(find.text('Repeating'), findsOneWidget);
+      expect(find.text('Once'), findsNothing);
+    });
+
+    testWidgets('choosing "Single-fire only" hides recurring reminders', (
+      tester,
+    ) async {
+      final now = DateTime.now();
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'repeating',
+          title: 'Repeating',
+          reminderAt: now.add(const Duration(hours: 1)),
+          repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+        ),
+        _note(
+          id: 'once',
+          title: 'Once',
+          reminderAt: now.add(const Duration(hours: 2)),
+        ),
+      ]);
+
+      await pickRecurrenceFilter(tester, 'Single-fire only');
+
+      expect(find.text('Repeating'), findsNothing);
+      expect(find.text('Once'), findsOneWidget);
+    });
+
+    testWidgets(
+      'shows "No matching reminders" (not "No reminders") when the filter '
+      'excludes everything that exists',
+      (tester) async {
+        final now = DateTime.now();
+        await _pumpRemindersScreen(tester, [
+          _note(
+            id: 'once',
+            title: 'Once',
+            reminderAt: now.add(const Duration(hours: 1)),
+          ),
+        ]);
+
+        await pickRecurrenceFilter(tester, 'Recurring only');
+
+        expect(find.text('No matching reminders'), findsOneWidget);
+        expect(find.text('No reminders'), findsNothing);
+      },
+    );
+  });
+
+  group('the status filter', () {
+    testWidgets('defaults to showing both unhandled and upcoming reminders', (
+      tester,
+    ) async {
+      final now = DateTime.now();
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'overdue',
+          title: 'Overdue',
+          reminderAt: now.subtract(const Duration(hours: 1)),
+        ),
+        _note(
+          id: 'upcoming',
+          title: 'Upcoming',
+          reminderAt: now.add(const Duration(hours: 1)),
+        ),
+      ]);
+
+      expect(find.text('Overdue'), findsOneWidget);
+      expect(find.text('Upcoming'), findsOneWidget);
+    });
+
+    testWidgets('choosing "Unhandled only" hides upcoming reminders', (
+      tester,
+    ) async {
+      final now = DateTime.now();
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'overdue',
+          title: 'Overdue',
+          reminderAt: now.subtract(const Duration(hours: 1)),
+        ),
+        _note(
+          id: 'upcoming',
+          title: 'Upcoming',
+          reminderAt: now.add(const Duration(hours: 1)),
+        ),
+      ]);
+
+      await pickStatusFilter(tester, 'Unhandled only');
+
+      expect(find.text('Overdue'), findsOneWidget);
+      expect(find.text('Upcoming'), findsNothing);
+    });
+
+    testWidgets(
+      'composes with the recurrence filter - both narrow the list together',
+      (tester) async {
+        final now = DateTime.now();
+        await _pumpRemindersScreen(tester, [
+          _note(
+            id: 'overdue-recurring',
+            title: 'Overdue recurring',
+            reminderAt: now.subtract(const Duration(hours: 1)),
+            repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+          ),
+          _note(
+            id: 'overdue-once',
+            title: 'Overdue once',
+            reminderAt: now.subtract(const Duration(hours: 2)),
+          ),
+          _note(
+            id: 'upcoming-recurring',
+            title: 'Upcoming recurring',
+            reminderAt: now.add(const Duration(hours: 1)),
+            repeatRule: RepeatRule.preset(RepeatFrequency.daily),
+          ),
+        ]);
+
+        await pickStatusFilter(tester, 'Unhandled only');
+        await pickRecurrenceFilter(tester, 'Recurring only');
+
+        expect(find.text('Overdue recurring'), findsOneWidget);
+        expect(find.text('Overdue once'), findsNothing);
+        expect(find.text('Upcoming recurring'), findsNothing);
+      },
+    );
+  });
+
   testWidgets(
     'the list\'s trailing padding grows to include the device\'s bottom '
     'safe-area inset, not just whatever default padding ListView.separated '
     'applies on its own, so the last reminder is not left unreachable '
     'behind an on-screen gesture/nav bar',
     (tester) async {
-      await _pumpRemindersScreen(
-        tester,
-        [
-          _note(
-            id: 'a',
-            title: 'One',
-            reminderAt: DateTime.now().add(const Duration(hours: 1)),
-          ),
-        ],
-        bottomInset: 40,
-      );
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'a',
+          title: 'One',
+          reminderAt: DateTime.now().add(const Duration(hours: 1)),
+        ),
+      ], bottomInset: 40);
 
       final list = tester.widget<ListView>(find.byType(ListView));
       expect((list.padding as EdgeInsets).bottom, 40);

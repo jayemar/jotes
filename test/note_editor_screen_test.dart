@@ -187,41 +187,37 @@ void _mainWidgetTests() {
       expect(notifier.saved.single.title, isEmpty);
       expect(notifier.saved.single.body, isEmpty);
       expect(notifier.saved.single.reminderAt, isNotNull);
-      expect(
-        notifier.saved.single.reminderAt!.isAfter(DateTime.now()),
-        isTrue,
-      );
+      expect(notifier.saved.single.reminderAt!.isAfter(DateTime.now()), isTrue);
       expect(notifier.saved.single.repeatRule, isNull);
     },
   );
 
-  testWidgets(
-    'tapping the Date and Time rows opens their native pickers, and '
-    'confirming a choice does not auto-advance off the reminder screen',
-    (tester) async {
-      await tester.pumpWidget(
-        const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
-      );
-      await tester.pumpAndSettle();
+  testWidgets('tapping the Date and Time rows opens their native pickers, and '
+      'confirming a choice does not auto-advance off the reminder screen', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
+    );
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('Set reminder'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Set reminder'));
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('reminder_edit_date')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reminder_edit_date')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
 
-      expect(find.text('New reminder'), findsOneWidget);
+    expect(find.text('New reminder'), findsOneWidget);
 
-      await tester.tap(find.byKey(const Key('reminder_edit_time')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('OK'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reminder_edit_time')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
 
-      expect(find.text('New reminder'), findsOneWidget);
-    },
-  );
+    expect(find.text('New reminder'), findsOneWidget);
+  });
 
   testWidgets(
     'picking Daily from the Repeat row before saving shows it selected in '
@@ -668,29 +664,26 @@ void _mainWidgetTests() {
       },
     );
 
-    testWidgets(
-      'the overflow menu offers "Customize toolbar", which opens '
-      'NoteToolbarSettingsScreen',
-      (tester) async {
-        SharedPreferences.setMockInitialValues({});
-        final note = _existingNote(body: 'plain text');
-        await tester.pumpWidget(
-          ProviderScope(
-            child: MaterialApp(home: NoteEditorScreen(existing: note)),
-          ),
-        );
-        await tester.pumpAndSettle();
+    testWidgets('the overflow menu offers "Customize toolbar", which opens '
+        'NoteToolbarSettingsScreen', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final note = _existingNote(body: 'plain text');
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        await tester.tap(find.byKey(const Key('note_more_menu')));
-        await tester.pumpAndSettle();
-        expect(find.text('Customize toolbar'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('note_more_menu')));
+      await tester.pumpAndSettle();
+      expect(find.text('Customize toolbar'), findsOneWidget);
 
-        await tester.tap(find.text('Customize toolbar'));
-        await tester.pumpAndSettle();
+      await tester.tap(find.text('Customize toolbar'));
+      await tester.pumpAndSettle();
 
-        expect(find.byType(NoteToolbarSettingsScreen), findsOneWidget);
-      },
-    );
+      expect(find.byType(NoteToolbarSettingsScreen), findsOneWidget);
+    });
 
     testWidgets(
       'hiding a tool (via noteToolbarProvider) removes its icon from the '
@@ -718,83 +711,77 @@ void _mainWidgetTests() {
       },
     );
 
-    testWidgets(
-      'reordering tools (via noteToolbarProvider) changes their '
-      'left-to-right order in the editor',
-      (tester) async {
-        SharedPreferences.setMockInitialValues({});
-        final note = _existingNote(body: 'plain text');
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(home: NoteEditorScreen(existing: note)),
-          ),
-        );
-        await tester.pumpAndSettle();
+    testWidgets('reordering tools (via noteToolbarProvider) changes their '
+        'left-to-right order in the editor', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final note = _existingNote(body: 'plain text');
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        final beforeX = tester
-            .getCenter(find.byKey(const Key('note_toolbar_undo')))
-            .dx;
-        final checklistX = tester
-            .getCenter(find.byKey(const Key('note_toolbar_checklist')))
-            .dx;
-        expect(beforeX, greaterThan(checklistX)); // undo starts last
+      final beforeX = tester
+          .getCenter(find.byKey(const Key('note_toolbar_undo')))
+          .dx;
+      final checklistX = tester
+          .getCenter(find.byKey(const Key('note_toolbar_checklist')))
+          .dx;
+      expect(beforeX, greaterThan(checklistX)); // undo starts last
 
-        await container.read(noteToolbarProvider.notifier).setOrder([
-          NoteToolbarTool.undo,
-          ...NoteToolbarTool.values.where((t) => t != NoteToolbarTool.undo),
-        ]);
-        await tester.pumpAndSettle();
+      await container.read(noteToolbarProvider.notifier).setOrder([
+        NoteToolbarTool.undo,
+        ...NoteToolbarTool.values.where((t) => t != NoteToolbarTool.undo),
+      ]);
+      await tester.pumpAndSettle();
 
-        final afterX = tester
-            .getCenter(find.byKey(const Key('note_toolbar_undo')))
-            .dx;
-        final afterChecklistX = tester
-            .getCenter(find.byKey(const Key('note_toolbar_checklist')))
-            .dx;
-        expect(afterX, lessThan(afterChecklistX)); // now undo starts first
-      },
-    );
+      final afterX = tester
+          .getCenter(find.byKey(const Key('note_toolbar_undo')))
+          .dx;
+      final afterChecklistX = tester
+          .getCenter(find.byKey(const Key('note_toolbar_checklist')))
+          .dx;
+      expect(afterX, lessThan(afterChecklistX)); // now undo starts first
+    });
 
-    testWidgets(
-      'the toolbar\'s own separator/background spans the full screen '
-      'width, not just the width of however many tools happen to be '
-      'visible - regression test for the horizontally-scrollable Row '
-      'shrinking its container to fit only its own content',
-      (tester) async {
-        SharedPreferences.setMockInitialValues({});
-        final note = _existingNote(body: 'plain text');
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(home: NoteEditorScreen(existing: note)),
-          ),
-        );
-        await tester.pumpAndSettle();
+    testWidgets('the toolbar\'s own separator/background spans the full screen '
+        'width, not just the width of however many tools happen to be '
+        'visible - regression test for the horizontally-scrollable Row '
+        'shrinking its container to fit only its own content', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final note = _existingNote(body: 'plain text');
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        // Hide all but one tool - if the container only sized itself to
-        // the scrollable Row's own (now much narrower) content, this
-        // would make the regression obvious rather than borderline.
-        final notifier = container.read(noteToolbarProvider.notifier);
-        for (final tool in NoteToolbarTool.values) {
-          if (tool != NoteToolbarTool.undo) {
-            await notifier.setHidden(tool, true);
-          }
+      // Hide all but one tool - if the container only sized itself to
+      // the scrollable Row's own (now much narrower) content, this
+      // would make the regression obvious rather than borderline.
+      final notifier = container.read(noteToolbarProvider.notifier);
+      for (final tool in NoteToolbarTool.values) {
+        if (tool != NoteToolbarTool.undo) {
+          await notifier.setHidden(tool, true);
         }
-        await tester.pumpAndSettle();
+      }
+      await tester.pumpAndSettle();
 
-        final screenWidth = tester.view.physicalSize.width /
-            tester.view.devicePixelRatio;
-        final containerWidth = tester
-            .getSize(find.byKey(const Key('note_toolbar_container')))
-            .width;
-        expect(containerWidth, screenWidth);
-      },
-    );
+      final screenWidth =
+          tester.view.physicalSize.width / tester.view.devicePixelRatio;
+      final containerWidth = tester
+          .getSize(find.byKey(const Key('note_toolbar_container')))
+          .width;
+      expect(containerWidth, screenWidth);
+    });
 
     testWidgets(
       'is hidden while no on-screen keyboard is up, so it isn\'t sitting '
@@ -816,93 +803,83 @@ void _mainWidgetTests() {
       },
     );
 
-    testWidgets(
-      'reappears the moment the on-screen keyboard comes up',
-      (tester) async {
-        SharedPreferences.setMockInitialValues({});
-        tester.view.resetViewInsets();
-        final note = _existingNote(body: 'plain text');
-        await tester.pumpWidget(
-          ProviderScope(
-            child: MaterialApp(home: NoteEditorScreen(existing: note)),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.byKey(const Key('note_toolbar_container')), findsNothing);
-
-        tester.view.viewInsets = const FakeViewPadding(bottom: 300);
-        await tester.pumpAndSettle();
-
-        expect(
-          find.byKey(const Key('note_toolbar_container')),
-          findsOneWidget,
-        );
-      },
-    );
-  });
-
-  testWidgets(
-    'Duplicate and Delete are offered right away for a brand-new, '
-    'never-saved note, not just once it has been saved',
-    (tester) async {
+    testWidgets('reappears the moment the on-screen keyboard comes up', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.resetViewInsets();
+      final note = _existingNote(body: 'plain text');
       await tester.pumpWidget(
-        const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byKey(const Key('note_more_menu')));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Share'), findsOneWidget);
-      expect(find.text('Duplicate'), findsOneWidget);
-      expect(find.text('Delete'), findsOneWidget);
-    },
-  );
-
-  testWidgets(
-    'choosing Duplicate on a brand-new, never-saved note persists it '
-    'immediately (rather than requiring the autosave debounce to have '
-    'already fired) before duplicating it',
-    (tester) async {
-      final notifier = _RecordingNotesNotifier();
-      final container = ProviderContainer(
-        overrides: [notesProvider.overrideWith(() => notifier)],
-      );
-      addTearDown(container.dispose);
-      await tester.pumpWidget(
-        UncontrolledProviderScope(
-          container: container,
-          child: const MaterialApp(home: NoteEditorScreen()),
+        ProviderScope(
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
         ),
       );
       await tester.pumpAndSettle();
+      expect(find.byKey(const Key('note_toolbar_container')), findsNothing);
 
-      await tester.enterText(
-        find.byKey(const Key('title_field')),
-        'Brand new note',
-      );
-      // Not saved yet - the autosave debounce hasn't elapsed.
-      expect(notifier.saved, isEmpty);
-
-      await tester.tap(find.byKey(const Key('note_more_menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Duplicate'));
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
       await tester.pumpAndSettle();
 
-      // The original was persisted immediately as part of opening the
-      // Duplicate flow, before the title dialog's own save.
-      expect(notifier.saved, hasLength(1));
-      expect(notifier.saved.single.title, 'Brand new note');
+      expect(find.byKey(const Key('note_toolbar_container')), findsOneWidget);
+    });
+  });
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Duplicate'));
-      await tester.pumpAndSettle();
+  testWidgets('Duplicate and Delete are offered right away for a brand-new, '
+      'never-saved note, not just once it has been saved', (tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: NoteEditorScreen())),
+    );
+    await tester.pumpAndSettle();
 
-      expect(notifier.saved, hasLength(2));
-      final copy = notifier.saved.last;
-      expect(copy.id, isNot(notifier.saved.first.id));
-      expect(copy.title, 'Brand new note');
-    },
-  );
+    await tester.tap(find.byKey(const Key('note_more_menu')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Share'), findsOneWidget);
+    expect(find.text('Duplicate'), findsOneWidget);
+    expect(find.text('Delete'), findsOneWidget);
+  });
+
+  testWidgets('choosing Duplicate on a brand-new, never-saved note persists it '
+      'immediately (rather than requiring the autosave debounce to have '
+      'already fired) before duplicating it', (tester) async {
+    final notifier = _RecordingNotesNotifier();
+    final container = ProviderContainer(
+      overrides: [notesProvider.overrideWith(() => notifier)],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: NoteEditorScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('title_field')),
+      'Brand new note',
+    );
+    // Not saved yet - the autosave debounce hasn't elapsed.
+    expect(notifier.saved, isEmpty);
+
+    await tester.tap(find.byKey(const Key('note_more_menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Duplicate'));
+    await tester.pumpAndSettle();
+
+    // The original was persisted immediately as part of opening the
+    // Duplicate flow, before the title dialog's own save.
+    expect(notifier.saved, hasLength(1));
+    expect(notifier.saved.single.title, 'Brand new note');
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Duplicate'));
+    await tester.pumpAndSettle();
+
+    expect(notifier.saved, hasLength(2));
+    final copy = notifier.saved.last;
+    expect(copy.id, isNot(notifier.saved.first.id));
+    expect(copy.title, 'Brand new note');
+  });
 
   testWidgets(
     'choosing Delete on a brand-new note that is still completely empty '
@@ -951,10 +928,7 @@ void _mainWidgetTests() {
       );
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const Key('title_field')),
-        'Delete me',
-      );
+      await tester.enterText(find.byKey(const Key('title_field')), 'Delete me');
       await tester.tap(find.byKey(const Key('note_more_menu')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Delete'));
@@ -1526,6 +1500,52 @@ void _mainWidgetTests() {
         expect(notifier.saved.single.body, 'Shared body text');
       },
     );
+
+    testWidgets(
+      'leading blank lines in the body are kept on save, not stripped as '
+      'if they were incidental whitespace',
+      (tester) async {
+        final notifier = _RecordingNotesNotifier();
+        final container = ProviderContainer(
+          overrides: [notesProvider.overrideWith(() => notifier)],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const MaterialApp(
+              home: NoteEditorScreen(initialBody: '\n\nShared body text'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(notifier.saved, hasLength(1));
+        expect(notifier.saved.single.body, '\n\nShared body text');
+      },
+    );
+
+    testWidgets('trailing whitespace is still stripped from the body on save', (
+      tester,
+    ) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: NoteEditorScreen(initialBody: 'Shared body text\n\n  '),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.body, 'Shared body text');
+    });
 
     testWidgets(
       'initialTitle/initialBody are ignored for an existing note - only a '

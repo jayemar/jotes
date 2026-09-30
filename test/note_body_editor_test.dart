@@ -5,6 +5,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/models/note.dart';
 import 'package:jotes/services/link_service.dart';
 import 'package:jotes/widgets/note_body_editor.dart';
+import 'package:jotes/widgets/note_body_view.dart'
+    show checklistToggleCommitDelay;
+
+/// Taps [finder] (a checkbox) and advances past the delay a check/uncheck
+/// deliberately sits at before actually committing (see
+/// checklistToggleCommitDelay's own doc comment) - without this, a plain
+/// pumpAndSettle() right after the tap settles before that timer ever
+/// fires, since nothing about the pending timer itself schedules a frame
+/// for pumpAndSettle to wait on.
+Future<void> tapCheckboxAndCommit(WidgetTester tester, Finder finder) async {
+  await tester.tap(finder);
+  await tester.pump(checklistToggleCommitDelay);
+  await tester.pumpAndSettle();
+}
 
 void main() {
   group('parseBody / serializeBody', () {
@@ -121,8 +135,7 @@ void main() {
 
   group('parseBody / serializeBody - bullet lists', () {
     test('"- text" and "* text" lines each parse as their own '
-        'BulletBodyBlock, round-tripping with their own original marker',
-        () {
+        'BulletBodyBlock, round-tripping with their own original marker', () {
       const body = '- dash bullet\n* star bullet';
       final blocks = parseBody(body);
 
@@ -177,7 +190,11 @@ void main() {
       final blocks = parseBody(body).cast<NumberedBodyBlock>();
 
       expect(blocks.map((b) => b.number), [1, 1, 3]);
-      expect(blocks.map((b) => b.text), ['First', 'Also written as 1', 'Skipped to 3']);
+      expect(blocks.map((b) => b.text), [
+        'First',
+        'Also written as 1',
+        'Skipped to 3',
+      ]);
       expect(serializeBody(blocks), body);
     });
 
@@ -624,8 +641,7 @@ void main() {
       expect(result.text, '- [ ] Buy milk');
     });
 
-    test('only the line the cursor is on is affected, not the whole body',
-        () {
+    test('only the line the cursor is on is affected, not the whole body', () {
       const text = 'First line\nSecond line\nThird line';
       final cursor = text.indexOf('Second');
       final result = toggleLineMarker(
@@ -660,6 +676,66 @@ void main() {
         marker: '- [ ] ',
       );
       expect(result.selection.baseOffset, result.text.indexOf('Buy') + 3);
+    });
+  });
+
+  group('toggleInlineMarker', () {
+    test('wraps a non-empty selection in the marker, keeping it selected', () {
+      const text = 'Buy some milk';
+      final result = toggleInlineMarker(
+        text: text,
+        selection: TextSelection(
+          baseOffset: text.indexOf('milk'),
+          extentOffset: text.indexOf('milk') + 4,
+        ),
+        marker: '**',
+      );
+      expect(result.text, 'Buy some **milk**');
+      expect(result.selection.textInside(result.text), 'milk');
+    });
+
+    test('removes the marker when the selection is already exactly '
+        'wrapped in it, back to plain text', () {
+      const text = 'Buy some **milk**';
+      final result = toggleInlineMarker(
+        text: text,
+        selection: TextSelection(
+          baseOffset: text.indexOf('milk'),
+          extentOffset: text.indexOf('milk') + 4,
+        ),
+        marker: '**',
+      );
+      expect(result.text, 'Buy some milk');
+      expect(result.selection.textInside(result.text), 'milk');
+    });
+
+    test('a collapsed selection (just a cursor) gets an empty marker pair '
+        'inserted with the cursor left in between', () {
+      const text = 'Buy milk';
+      final result = toggleInlineMarker(
+        text: text,
+        selection: const TextSelection.collapsed(offset: 8),
+        marker: '**',
+      );
+      expect(result.text, 'Buy milk****');
+      expect(result.selection, const TextSelection.collapsed(offset: 10));
+    });
+
+    test('italic ("*") does not misfire inside a bold ("**") pair\'s own '
+        'boundary', () {
+      const text = 'Buy some **milk** today';
+      final result = toggleInlineMarker(
+        text: text,
+        selection: TextSelection(
+          baseOffset: text.indexOf('milk'),
+          extentOffset: text.indexOf('milk') + 4,
+        ),
+        marker: '*',
+      );
+      // Not unwrapped (that would strip a single "*" from each side of the
+      // "**" pair, corrupting it) - wrapped instead, same as any other
+      // not-already-wrapped selection.
+      expect(result.text, 'Buy some ***milk*** today');
     });
   });
 
@@ -716,11 +792,7 @@ void main() {
 
     test('list markers move with their line, not left behind', () {
       const text = '- [ ] First\nPlain second';
-      final result = swapLine(
-        text: text,
-        cursorOffset: 0,
-        direction: 1,
-      )!;
+      final result = swapLine(text: text, cursorOffset: 0, direction: 1)!;
       expect(result.text, 'Plain second\n- [ ] First');
     });
   });
@@ -740,10 +812,7 @@ void main() {
     test('cutting the last line removes the preceding newline instead, so '
         'no blank line is left dangling at the end', () {
       const text = 'First\nSecond\nThird';
-      final result = cutLineAt(
-        text: text,
-        cursorOffset: text.indexOf('Third'),
-      );
+      final result = cutLineAt(text: text, cursorOffset: text.indexOf('Third'));
       expect(result.value.text, 'First\nSecond');
       expect(result.cutText, 'Third');
     });
@@ -770,7 +839,10 @@ void main() {
         text: text,
         cursorOffset: text.indexOf('Second') + 3,
       );
-      expect(result.value.selection.baseOffset, result.value.text.indexOf('Third'));
+      expect(
+        result.value.selection.baseOffset,
+        result.value.text.indexOf('Third'),
+      );
     });
   });
 
@@ -907,8 +979,10 @@ void main() {
         final key = GlobalKey<NoteBodyEditorState>();
         await pumpEditor(
           tester,
-          initialBody: List.generate(10, (i) => '${i + 1}. Item ${i + 1}')
-              .join('\n'),
+          initialBody: List.generate(
+            10,
+            (i) => '${i + 1}. Item ${i + 1}',
+          ).join('\n'),
           key: key,
         );
 
@@ -929,11 +1003,7 @@ void main() {
       'paragraph',
       (tester) async {
         final key = GlobalKey<NoteBodyEditorState>();
-        await pumpEditor(
-          tester,
-          initialBody: '- Bread',
-          key: key,
-        );
+        await pumpEditor(tester, initialBody: '- Bread', key: key);
 
         await tester.tap(find.text('Bread'));
         await tester.pumpAndSettle();
@@ -981,8 +1051,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(Checkbox));
-      await tester.pumpAndSettle();
+      await tapCheckboxAndCommit(tester, find.byType(Checkbox));
 
       expect(latest, '- [x] Buy milk');
       expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue);
@@ -1010,8 +1079,7 @@ void main() {
           );
           await tester.pumpAndSettle();
 
-          await tester.tap(find.byType(Checkbox).at(0));
-          await tester.pumpAndSettle();
+          await tapCheckboxAndCommit(tester, find.byType(Checkbox).at(0));
 
           expect(latest, '- [ ] second\n- [ ] third\n- [x] first');
         },
@@ -1040,8 +1108,7 @@ void main() {
           await tester.pumpAndSettle();
 
           // "second" is the checked one - unchecking it.
-          await tester.tap(find.byType(Checkbox).at(1));
-          await tester.pumpAndSettle();
+          await tapCheckboxAndCommit(tester, find.byType(Checkbox).at(1));
 
           expect(latest, '- [ ] first\n- [ ] second\n- [ ] third');
         },
@@ -1069,8 +1136,10 @@ void main() {
           );
           await tester.pumpAndSettle();
 
-          await tester.tap(find.byType(Checkbox).at(1)); // "second"
-          await tester.pumpAndSettle();
+          await tapCheckboxAndCommit(
+            tester,
+            find.byType(Checkbox).at(1),
+          ); // "second"
 
           expect(latest, '- [ ] first\n- [x] second');
         },
@@ -1102,8 +1171,10 @@ void main() {
           );
           await tester.pumpAndSettle();
 
-          await tester.tap(find.byType(Checkbox).at(0)); // "first"
-          await tester.pumpAndSettle();
+          await tapCheckboxAndCommit(
+            tester,
+            find.byType(Checkbox).at(0),
+          ); // "first"
 
           expect(
             latest,
@@ -1137,13 +1208,101 @@ void main() {
           );
           await tester.pumpAndSettle();
 
-          await tester.tap(find.byType(Checkbox).at(0)); // "parent"
+          await tapCheckboxAndCommit(
+            tester,
+            find.byType(Checkbox).at(0),
+          ); // "parent"
+
+          expect(latest, '- [ ] sub-item\n- [ ] other\n- [x] parent');
+        },
+      );
+
+      testWidgets(
+        'the checkbox itself flips right away, and the item stays put - '
+        'the sink-to-bottom reorder only actually commits after '
+        'checklistToggleCommitDelay elapses',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: '- [ ] first\n- [ ] second',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
           await tester.pumpAndSettle();
 
+          await tester.tap(find.byType(Checkbox).at(0)); // "first"
+          await tester.pump();
+
+          expect(
+            tester.widget<Checkbox>(find.byType(Checkbox).at(0)).value,
+            isTrue,
+            reason: 'the checkbox shows checked immediately',
+          );
           expect(
             latest,
-            '- [ ] sub-item\n- [ ] other\n- [x] parent',
+            isEmpty,
+            reason:
+                'but nothing has actually committed/reordered yet - '
+                'onChanged has never even fired',
           );
+
+          await tester.pump(checklistToggleCommitDelay);
+          await tester.pumpAndSettle();
+
+          expect(latest, '- [ ] second\n- [x] first');
+        },
+      );
+
+      testWidgets(
+        'tapping the same checkbox again before the delay elapses cancels '
+        'the pending toggle entirely - back to the original state, with '
+        'no reorder and no onChanged call at all',
+        (tester) async {
+          final key = GlobalKey<NoteBodyEditorState>();
+          String latest = '';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: NoteBodyEditor(
+                  key: key,
+                  initialBody: '- [ ] first\n- [ ] second',
+                  textColor: Colors.black,
+                  hintColor: Colors.black38,
+                  linkColor: Colors.blue,
+                  onChanged: (body) => latest = body,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(find.byType(Checkbox).at(0)); // check "first"
+          await tester.pump();
+          await tester.tap(find.byType(Checkbox).at(0)); // uncheck again
+          await tester.pump();
+
+          expect(
+            tester.widget<Checkbox>(find.byType(Checkbox).at(0)).value,
+            isFalse,
+          );
+
+          // Long past the original delay - if the first tap's timer were
+          // still going to fire, this is well past when it would have.
+          await tester.pump(checklistToggleCommitDelay * 2);
+          await tester.pumpAndSettle();
+
+          expect(latest, isEmpty);
+          expect(find.byType(Checkbox).at(0), findsOneWidget);
         },
       );
     });
@@ -1290,10 +1449,273 @@ void main() {
       },
     );
 
+    testWidgets('toggleBulletLine while not currently editing falls back to '
+        'appending a new empty bullet at the end - there is no "current '
+        'line" to toggle without an active cursor', (tester) async {
+      final key = GlobalKey<NoteBodyEditorState>();
+      String latest = '';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NoteBodyEditor(
+              key: key,
+              initialBody: 'Some notes.',
+              textColor: Colors.black,
+              hintColor: Colors.black38,
+              linkColor: Colors.blue,
+              onChanged: (body) => latest = body,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(key.currentState!.isEditingBody, isFalse);
+      key.currentState!.toggleBulletLine();
+      await tester.pumpAndSettle();
+
+      expect(latest, 'Some notes.\n- ');
+      expect(key.currentState!.isEditingBody, isTrue);
+    });
+
     testWidgets(
-      'toggleBulletLine while not currently editing falls back to '
-      'appending a new empty bullet at the end - there is no "current '
-      'line" to toggle without an active cursor',
+      'toggleBold wraps the current selection in "**", keeping it selected',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Buy some milk',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+        final controller = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        controller.selection = TextSelection(
+          baseOffset: 'Buy some '.length,
+          extentOffset: 'Buy some milk'.length,
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.toggleBold();
+        await tester.pumpAndSettle();
+
+        expect(latest, 'Buy some **milk**');
+        expect(controller.selection.textInside(controller.text), 'milk');
+      },
+    );
+
+    testWidgets(
+      'toggleBold pressed again on the same (now bold) selection removes '
+      'the marker, back to plain text',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Buy some **milk**',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+        final controller = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        controller.selection = TextSelection(
+          baseOffset: 'Buy some **'.length,
+          extentOffset: 'Buy some **milk'.length,
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.toggleBold();
+        await tester.pumpAndSettle();
+
+        expect(latest, 'Buy some milk');
+      },
+    );
+
+    testWidgets('toggleItalic wraps the current selection in "*"', (
+      tester,
+    ) async {
+      final key = GlobalKey<NoteBodyEditorState>();
+      String latest = '';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NoteBodyEditor(
+              key: key,
+              initialBody: 'Buy some milk',
+              textColor: Colors.black,
+              hintColor: Colors.black38,
+              linkColor: Colors.blue,
+              onChanged: (body) => latest = body,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.focusBody();
+      await tester.pumpAndSettle();
+      final controller = tester
+          .widget<TextField>(find.byType(TextField))
+          .controller!;
+      controller.selection = TextSelection(
+        baseOffset: 'Buy some '.length,
+        extentOffset: 'Buy some milk'.length,
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.toggleItalic();
+      await tester.pumpAndSettle();
+
+      expect(latest, 'Buy some *milk*');
+    });
+
+    testWidgets('toggleStrikethrough wraps the current selection in "~~"', (
+      tester,
+    ) async {
+      final key = GlobalKey<NoteBodyEditorState>();
+      String latest = '';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NoteBodyEditor(
+              key: key,
+              initialBody: 'Buy some milk',
+              textColor: Colors.black,
+              hintColor: Colors.black38,
+              linkColor: Colors.blue,
+              onChanged: (body) => latest = body,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.focusBody();
+      await tester.pumpAndSettle();
+      final controller = tester
+          .widget<TextField>(find.byType(TextField))
+          .controller!;
+      controller.selection = TextSelection(
+        baseOffset: 'Buy some '.length,
+        extentOffset: 'Buy some milk'.length,
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.toggleStrikethrough();
+      await tester.pumpAndSettle();
+
+      expect(latest, 'Buy some ~~milk~~');
+    });
+
+    testWidgets('toggleCode wraps the current selection in "`"', (
+      tester,
+    ) async {
+      final key = GlobalKey<NoteBodyEditorState>();
+      String latest = '';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NoteBodyEditor(
+              key: key,
+              initialBody: 'Buy some milk',
+              textColor: Colors.black,
+              hintColor: Colors.black38,
+              linkColor: Colors.blue,
+              onChanged: (body) => latest = body,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.focusBody();
+      await tester.pumpAndSettle();
+      final controller = tester
+          .widget<TextField>(find.byType(TextField))
+          .controller!;
+      controller.selection = TextSelection(
+        baseOffset: 'Buy some '.length,
+        extentOffset: 'Buy some milk'.length,
+      );
+      await tester.pumpAndSettle();
+
+      key.currentState!.toggleCode();
+      await tester.pumpAndSettle();
+
+      expect(latest, 'Buy some `milk`');
+    });
+
+    testWidgets(
+      'toggleCode pressed again on the same (now code) selection removes '
+      'the marker, back to plain text',
+      (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'Buy some `milk`',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+        final controller = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        controller.selection = TextSelection(
+          baseOffset: 'Buy some `'.length,
+          extentOffset: 'Buy some `milk'.length,
+        );
+        await tester.pumpAndSettle();
+
+        key.currentState!.toggleCode();
+        await tester.pumpAndSettle();
+
+        expect(latest, 'Buy some milk');
+      },
+    );
+
+    testWidgets(
+      'toggleBold/toggleItalic/toggleStrikethrough/toggleCode are a no-op '
+      'while not currently editing - there is no selection to format '
+      'without an active cursor',
       (tester) async {
         final key = GlobalKey<NoteBodyEditorState>();
         String latest = '';
@@ -1314,11 +1736,14 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(key.currentState!.isEditingBody, isFalse);
-        key.currentState!.toggleBulletLine();
+        key.currentState!.toggleBold();
+        key.currentState!.toggleItalic();
+        key.currentState!.toggleStrikethrough();
+        key.currentState!.toggleCode();
         await tester.pumpAndSettle();
 
-        expect(latest, 'Some notes.\n- ');
-        expect(key.currentState!.isEditingBody, isTrue);
+        expect(latest, isEmpty);
+        expect(key.currentState!.isEditingBody, isFalse);
       },
     );
 
@@ -1406,11 +1831,8 @@ void main() {
             },
           );
           addTearDown(
-            () =>
-                tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-                  SystemChannels.platform,
-                  null,
-                ),
+            () => tester.binding.defaultBinaryMessenger
+                .setMockMethodCallHandler(SystemChannels.platform, null),
           );
 
           final key = GlobalKey<NoteBodyEditorState>();
@@ -1446,10 +1868,7 @@ void main() {
 
           expect(latest, 'First\nThird');
           expect(clipboardCalls, hasLength(1));
-          expect(
-            (clipboardCalls.single.arguments as Map)['text'],
-            'Second',
-          );
+          expect((clipboardCalls.single.arguments as Map)['text'], 'Second');
         },
       );
 
@@ -1492,11 +1911,8 @@ void main() {
             (call) async => null,
           );
           addTearDown(
-            () =>
-                tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-                  SystemChannels.platform,
-                  null,
-                ),
+            () => tester.binding.defaultBinaryMessenger
+                .setMockMethodCallHandler(SystemChannels.platform, null),
           );
 
           final key = GlobalKey<NoteBodyEditorState>();
@@ -1559,62 +1975,59 @@ void main() {
         updated: DateTime(2026, 1, 1),
       );
 
-      testWidgets(
-        'inserts a markdown link at the cursor and leaves the cursor '
-        'right after it, back in edit mode even though the note-link '
-        'picker dialog (awaited by the caller before this runs) steals '
-        'focus and flips this editor to view mode first',
-        (tester) async {
-          final key = GlobalKey<NoteBodyEditorState>();
-          String latest = '';
-          await tester.pumpWidget(
-            MaterialApp(
-              home: Scaffold(
-                body: NoteBodyEditor(
-                  key: key,
-                  initialBody: 'See  for details',
-                  textColor: Colors.black,
-                  hintColor: Colors.black38,
-                  linkColor: Colors.blue,
-                  onChanged: (body) => latest = body,
-                ),
+      testWidgets('inserts a markdown link at the cursor and leaves the cursor '
+          'right after it, back in edit mode even though the note-link '
+          'picker dialog (awaited by the caller before this runs) steals '
+          'focus and flips this editor to view mode first', (tester) async {
+        final key = GlobalKey<NoteBodyEditorState>();
+        String latest = '';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                key: key,
+                initialBody: 'See  for details',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (body) => latest = body,
               ),
             ),
-          );
-          await tester.pumpAndSettle();
+          ),
+        );
+        await tester.pumpAndSettle();
 
-          key.currentState!.focusBody();
-          await tester.pumpAndSettle();
-          final controller = tester
-              .widget<TextField>(find.byType(TextField))
-              .controller!;
-          controller.selection = const TextSelection.collapsed(offset: 4);
-          await tester.pumpAndSettle();
+        key.currentState!.focusBody();
+        await tester.pumpAndSettle();
+        final controller = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        controller.selection = const TextSelection.collapsed(offset: 4);
+        await tester.pumpAndSettle();
 
-          // Mimics what actually happens while the note-link picker's own
-          // dialog is open and focused (see NoteEditorScreen._insertNoteLink,
-          // which awaits it before calling insertNoteLink).
-          key.currentState!.exitEditMode();
-          await tester.pumpAndSettle();
-          expect(key.currentState!.isEditingBody, isFalse);
+        // Mimics what actually happens while the note-link picker's own
+        // dialog is open and focused (see NoteEditorScreen._insertNoteLink,
+        // which awaits it before calling insertNoteLink).
+        key.currentState!.exitEditMode();
+        await tester.pumpAndSettle();
+        expect(key.currentState!.isEditingBody, isFalse);
 
-          key.currentState!.insertNoteLink(target);
-          await tester.pumpAndSettle();
+        key.currentState!.insertNoteLink(target);
+        await tester.pumpAndSettle();
 
-          const expectedBody = 'See [Grocery List](target-id) for details';
-          expect(latest, expectedBody);
-          expect(key.currentState!.isEditingBody, isTrue);
-          final reboundController = tester
-              .widget<TextField>(find.byType(TextField))
-              .controller!;
-          expect(reboundController.text, expectedBody);
-          expect(
-            reboundController.selection,
-            // right after "See [Grocery List](target-id)"
-            const TextSelection.collapsed(offset: 29),
-          );
-        },
-      );
+        const expectedBody = 'See [Grocery List](target-id) for details';
+        expect(latest, expectedBody);
+        expect(key.currentState!.isEditingBody, isTrue);
+        final reboundController = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        expect(reboundController.text, expectedBody);
+        expect(
+          reboundController.selection,
+          // right after "See [Grocery List](target-id)"
+          const TextSelection.collapsed(offset: 29),
+        );
+      });
 
       testWidgets(
         'falls back to the end of the body when there is no meaningful '
@@ -1695,9 +2108,7 @@ void main() {
         final controller = tester
             .widget<TextField>(find.byType(TextField))
             .controller!;
-        controller.selection = TextSelection.collapsed(
-          offset: 'Before'.length,
-        );
+        controller.selection = TextSelection.collapsed(offset: 'Before'.length);
         await tester.pumpAndSettle();
 
         await key.currentState!.pasteAtCursor();
@@ -1770,38 +2181,37 @@ void main() {
       });
     });
 
-    testWidgets(
-      'onModeChanged fires when entering and leaving edit mode, so a '
-      'parent toolbar (e.g. move-line buttons) can stay in sync',
-      (tester) async {
-        final key = GlobalKey<NoteBodyEditorState>();
-        var modeChangedCount = 0;
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: NoteBodyEditor(
-                key: key,
-                initialBody: 'Some notes.',
-                textColor: Colors.black,
-                hintColor: Colors.black38,
-                linkColor: Colors.blue,
-                onChanged: (_) {},
-                onModeChanged: () => modeChangedCount++,
-              ),
+    testWidgets('onModeChanged fires when entering and leaving edit mode, so a '
+        'parent toolbar (e.g. move-line buttons) can stay in sync', (
+      tester,
+    ) async {
+      final key = GlobalKey<NoteBodyEditorState>();
+      var modeChangedCount = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NoteBodyEditor(
+              key: key,
+              initialBody: 'Some notes.',
+              textColor: Colors.black,
+              hintColor: Colors.black38,
+              linkColor: Colors.blue,
+              onChanged: (_) {},
+              onModeChanged: () => modeChangedCount++,
             ),
           ),
-        );
-        await tester.pumpAndSettle();
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        key.currentState!.focusBody();
-        await tester.pumpAndSettle();
-        expect(modeChangedCount, 1);
+      key.currentState!.focusBody();
+      await tester.pumpAndSettle();
+      expect(modeChangedCount, 1);
 
-        key.currentState!.exitEditMode();
-        await tester.pumpAndSettle();
-        expect(modeChangedCount, 2);
-      },
-    );
+      key.currentState!.exitEditMode();
+      await tester.pumpAndSettle();
+      expect(modeChangedCount, 2);
+    });
 
     testWidgets('the remove (x) button deletes a checklist item', (
       tester,
@@ -2382,8 +2792,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(Checkbox));
-      await tester.pumpAndSettle();
+      await tapCheckboxAndCommit(tester, find.byType(Checkbox));
       expect(latest, '- [x] item');
 
       key.currentState!.undo();
@@ -2481,10 +2890,14 @@ void main() {
       // moving whichever item is still unchecked back up to the front:
       // checking "first" leaves "second" at the front, checking that
       // leaves "third" at the front, ready to delete.
-      await tester.tap(find.byType(Checkbox).at(0)); // checks "first"
-      await tester.pumpAndSettle();
-      await tester.tap(find.byType(Checkbox).at(0)); // checks "second"
-      await tester.pumpAndSettle();
+      await tapCheckboxAndCommit(
+        tester,
+        find.byType(Checkbox).at(0),
+      ); // checks "first"
+      await tapCheckboxAndCommit(
+        tester,
+        find.byType(Checkbox).at(0),
+      ); // checks "second"
       await tester.tap(find.byIcon(Icons.close).at(0)); // deletes "third"
       await tester.pumpAndSettle();
       expect(latest, '- [x] first\n- [x] second');
@@ -2860,6 +3273,55 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(key.currentState!.isEditingBody, isTrue);
+      },
+    );
+  });
+
+  group('inline formatting in view mode', () {
+    testWidgets(
+      'renders bold, italic, strikethrough, and code spans with their own '
+      'distinct styles - not as literal markdown syntax',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: NoteBodyEditor(
+                initialBody:
+                    'This is **bold**, *italic*, ~~strike~~, and `code`.',
+                textColor: Colors.black,
+                hintColor: Colors.black38,
+                linkColor: Colors.blue,
+                onChanged: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final richText = tester.widget<RichText>(find.byType(RichText).first);
+        final spans = <TextSpan>[];
+        void collect(InlineSpan span) {
+          if (span is! TextSpan) return;
+          if (span.text != null) spans.add(span);
+          for (final child in span.children ?? const <InlineSpan>[]) {
+            collect(child);
+          }
+        }
+
+        collect(richText.text);
+        TextSpan spanWithText(String text) =>
+            spans.firstWhere((s) => s.text == text);
+
+        expect(spanWithText('bold').style?.fontWeight, FontWeight.bold);
+        expect(spanWithText('italic').style?.fontStyle, FontStyle.italic);
+        expect(
+          spanWithText('strike').style?.decoration,
+          TextDecoration.lineThrough,
+        );
+        expect(spanWithText('code').style?.fontFamily, 'monospace');
+        // The raw markdown punctuation shouldn't appear as literal visible
+        // text anywhere in the rendered spans.
+        expect(spans.any((s) => s.text!.contains('**')), isFalse);
       },
     );
   });

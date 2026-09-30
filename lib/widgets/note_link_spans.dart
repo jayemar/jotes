@@ -6,6 +6,7 @@ import '../models/note.dart';
 import '../providers/notes_provider.dart';
 import '../screens/note_editor_screen.dart';
 import '../services/link_service.dart';
+import 'note_inline_format.dart';
 import 'note_links.dart';
 
 /// Opens [url]: a scheme-less target (see [isInternalLinkTarget]) is
@@ -47,10 +48,14 @@ Future<void> openLink(BuildContext context, String url) async {
 }
 
 /// Splits [text] into [InlineSpan]s for [Text.rich]: plain runs in
-/// [baseStyle], and any `[label](url)`/bare-URL link (see [parseLinks])
-/// underlined in [linkColor] with a tap recognizer that calls [onTapLink].
-/// Kept separate from note_links.dart's pure [parseLinks] so that stays
-/// trivially unit-testable with no Flutter binding required.
+/// [baseStyle] (further split by any `**bold**`/`*italic*`/`~~strike~~`/
+/// `` `code` `` formatting - see [parseInlineFormatting]), and any
+/// `[label](url)`/bare-URL link (see [parseLinks]) underlined in
+/// [linkColor] with a tap recognizer that calls [onTapLink]. A link's own
+/// label isn't itself re-scanned for inline formatting, same non-nesting
+/// scope as [parseInlineFormatting]'s own doc comment. Kept separate from
+/// note_links.dart's pure [parseLinks] so that stays trivially
+/// unit-testable with no Flutter binding required.
 List<InlineSpan> buildLinkSpans({
   required String text,
   required TextStyle baseStyle,
@@ -78,6 +83,35 @@ List<InlineSpan> buildLinkSpans({
             ..onTap = () => onTapLink(segment.url!),
         )
       else
-        TextSpan(text: segment.text, style: baseStyle),
+        for (final formatted in parseInlineFormatting(segment.text))
+          TextSpan(
+            text: formatted.text,
+            style: _applyInlineFormats(baseStyle, formatted.formats),
+          ),
   ];
+}
+
+/// [baseStyle] with each of [formats] layered on - combining with (rather
+/// than replacing) [baseStyle]'s own decoration for strikethrough, same
+/// reasoning as [buildLinkSpans]' own underline-combining for a link.
+TextStyle _applyInlineFormats(TextStyle baseStyle, Set<InlineFormat> formats) {
+  var style = baseStyle;
+  if (formats.contains(InlineFormat.bold)) {
+    style = style.copyWith(fontWeight: FontWeight.bold);
+  }
+  if (formats.contains(InlineFormat.italic)) {
+    style = style.copyWith(fontStyle: FontStyle.italic);
+  }
+  if (formats.contains(InlineFormat.strikethrough)) {
+    style = style.copyWith(
+      decoration: TextDecoration.combine([
+        style.decoration ?? TextDecoration.none,
+        TextDecoration.lineThrough,
+      ]),
+    );
+  }
+  if (formats.contains(InlineFormat.code)) {
+    style = style.copyWith(fontFamily: 'monospace');
+  }
+  return style;
 }
