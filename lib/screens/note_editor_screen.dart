@@ -283,6 +283,15 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
         final scheduleError = await _save();
         if (!mounted) return;
         await _showReminderSchedulingWarnings(scheduleError);
+        // Confirming a reminder (the checkmark on ReminderEditScreen) is
+        // treated as "done with this note for now" - back out to the
+        // notes list immediately rather than leaving the user back on
+        // the note they were just configuring a reminder for. Goes
+        // through the normal pop path (PopScope above), not a bare
+        // Navigator.pop, so it still behaves exactly like tapping the
+        // back arrow would - here that's a no-op re-save, since the
+        // explicit _save() above already cleared _dirty.
+        if (mounted) Navigator.pop(context);
       case ReminderRemoved():
         await _clearReminder();
     }

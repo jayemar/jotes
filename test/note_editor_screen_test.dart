@@ -179,9 +179,11 @@ void _mainWidgetTests() {
       await tester.tap(find.byKey(const Key('reminder_edit_save')));
       await tester.pumpAndSettle();
 
-      // Back on the note editor screen - never navigated further/popped
-      // it, so if the save were still deferred to PopScope this would be
-      // empty.
+      // This screen is the root route here (nothing beneath it to pop
+      // back to - see the dedicated pop-behavior test below for that),
+      // so checking the save itself already happened is still possible
+      // this way: if it were still deferred to PopScope instead, this
+      // would be empty.
       expect(find.text('New reminder'), findsNothing);
       expect(notifier.saved, hasLength(1));
       expect(notifier.saved.single.title, isEmpty);
@@ -1146,6 +1148,55 @@ void _mainWidgetTests() {
     expect(find.text('open note'), findsOneWidget);
     expect(find.byKey(const Key('title_field')), findsNothing);
   });
+
+  testWidgets(
+    'confirming a reminder (the checkmark on ReminderEditScreen) pops all '
+    'the way back past the note editor too, not just back onto the note',
+    (tester) async {
+      final notifier = _RecordingNotesNotifier();
+      final container = ProviderContainer(
+        overrides: [notesProvider.overrideWith(() => notifier)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Center(
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const NoteEditorScreen(),
+                      ),
+                    ),
+                    child: const Text('open note'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('open note'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Set reminder'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('reminder_edit_save')));
+      await tester.pumpAndSettle();
+
+      expect(notifier.saved, hasLength(1));
+      expect(notifier.saved.single.reminderAt, isNotNull);
+      // Back on the launcher screen - both the reminder editor *and* the
+      // note editor underneath it are gone, not just the former.
+      expect(find.text('open note'), findsOneWidget);
+      expect(find.byKey(const Key('title_field')), findsNothing);
+      expect(find.text('New reminder'), findsNothing);
+    },
+  );
 
   testWidgets(
     'pressing Enter/Next in the title field moves focus into the note '

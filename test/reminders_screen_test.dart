@@ -9,12 +9,23 @@ import 'package:jotes/screens/notes_screen.dart';
 import 'package:jotes/screens/reminders_screen.dart';
 
 /// Same in-memory test double pattern as notes_screen_sync_indicator_test.dart.
+/// Overrides delete() too (real sembast/notification-cancel/PocketBase I/O
+/// doesn't resolve within flutter_test's fake-async pump cycle, so it hangs
+/// pumpAndSettle otherwise - same lesson as note_editor_screen_test.dart's
+/// own _RecordingNotesNotifier) - just records what was deleted instead.
 class _FakeNotesNotifier extends NotesNotifier {
   _FakeNotesNotifier(this._notes);
   final List<Note> _notes;
+  final List<Note> deleted = [];
 
   @override
   Future<List<Note>> build() async => _notes;
+
+  @override
+  Future<void> delete(Note note) async {
+    deleted.add(note);
+    state = AsyncData(_notes.where((n) => n.id != note.id).toList());
+  }
 }
 
 Note _note({
@@ -412,4 +423,83 @@ void main() {
       expect((list.padding as EdgeInsets).bottom, 40);
     },
   );
+
+  group('the long-press context menu', () {
+    testWidgets('long-pressing a reminder offers Delete', (tester) async {
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'a',
+          title: 'Overdue',
+          reminderAt: DateTime.now().subtract(const Duration(hours: 1)),
+        ),
+      ]);
+
+      await tester.longPress(find.text('Overdue'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('reminders_context_menu_delete')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+      'choosing Delete asks for confirmation first; cancelling leaves the '
+      'note untouched',
+      (tester) async {
+        final container = await _pumpRemindersScreen(tester, [
+          _note(
+            id: 'a',
+            title: 'Overdue',
+            reminderAt: DateTime.now().subtract(const Duration(hours: 1)),
+          ),
+        ]);
+
+        await tester.longPress(find.text('Overdue'));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const Key('reminders_context_menu_delete')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Delete note?'), findsOneWidget);
+
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Overdue'), findsOneWidget);
+        final notifier =
+            container.read(notesProvider.notifier) as _FakeNotesNotifier;
+        expect(notifier.deleted, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'confirming Delete cancels the notification and removes the note - '
+      'notesProvider.notifier.delete already does both in one call',
+      (tester) async {
+        final container = await _pumpRemindersScreen(tester, [
+          _note(
+            id: 'a',
+            title: 'Overdue',
+            reminderAt: DateTime.now().subtract(const Duration(hours: 1)),
+          ),
+        ]);
+
+        await tester.longPress(find.text('Overdue'));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const Key('reminders_context_menu_delete')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+        await tester.pumpAndSettle();
+
+        final notifier =
+            container.read(notesProvider.notifier) as _FakeNotesNotifier;
+        expect(notifier.deleted.map((n) => n.id), ['a']);
+        expect(find.text('No reminders'), findsOneWidget);
+      },
+    );
+  });
 }

@@ -29,6 +29,61 @@ IconData _statusFilterIcon(ReminderStatusFilter filter) => switch (filter) {
   ReminderStatusFilter.unhandledOnly => Icons.alarm_off,
 };
 
+/// Long-pressing a row offers Delete - removing the note entirely (not
+/// just its reminder), which is why this confirms first, same reasoning
+/// as NoteEditorScreen._deleteNote's own doc comment: a long-press here is
+/// one step closer to "deliberate" than a single tap, but still nowhere
+/// near NotesScreen's own bulk-select-then-delete flow (a whole separate
+/// mode, its own visual exit-animation cushion), so this isn't treated as
+/// already-confirmed the way that one is.
+/// notesProvider.notifier.delete already does everything "cancel the
+/// notification and delete the note" needs in one call (see
+/// notes_provider.dart) - this just gets the user's confirmed intent to
+/// call it with.
+Future<void> _showReminderContextMenu(
+  BuildContext context,
+  WidgetRef ref,
+  Note note,
+) async {
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Wrap(
+        children: [
+          ListTile(
+            key: const Key('reminders_context_menu_delete'),
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('Delete'),
+            onTap: () => Navigator.pop(sheetContext, 'delete'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (action != 'delete' || !context.mounted) return;
+
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Delete note?'),
+      content: const Text('This cannot be undone.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+
+  await ref.read(notesProvider.notifier).delete(note);
+}
+
 /// Every note with an active (already fired, not yet Dismissed/Snoozed) or
 /// pending (upcoming) reminder, sorted oldest-first - the in-app equivalent
 /// of the ReminderListWidget home-screen widget, sharing the same
@@ -168,6 +223,7 @@ class RemindersScreen extends ConsumerWidget {
                           builder: (_) => NoteEditorScreen(existing: note),
                         ),
                       ),
+                onLongPress: () => _showReminderContextMenu(context, ref, note),
               );
             },
           );
