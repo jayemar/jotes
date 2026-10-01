@@ -7,8 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+import '../models/board.dart';
 import '../models/note.dart';
 import '../providers/app_info_provider.dart';
+import '../providers/boards_provider.dart';
 import '../providers/notes_provider.dart';
 import '../providers/notes_view_provider.dart';
 import '../providers/sync_provider.dart';
@@ -21,6 +24,7 @@ import '../theme/app_text_styles.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_card.dart';
 import '../widgets/settings_labels.dart';
+import 'boards_screen.dart';
 import 'note_editor_screen.dart';
 import 'reminders_screen.dart';
 import 'settings_screen.dart';
@@ -37,8 +41,16 @@ IconData _reminderVisibilityIcon(NoteReminderFilter filter) => switch (filter) {
   NoteReminderFilter.withReminders => Icons.alarm,
 };
 
+const _uuid = Uuid();
+
 class NotesScreen extends ConsumerStatefulWidget {
-  const NotesScreen({super.key});
+  /// When non-null, this screen shows only [board]'s own notes (reached by
+  /// tapping a board in BoardsScreen) instead of every note - same search/
+  /// sort/layout machinery, just narrowed first. Null (the default) is the
+  /// normal "All notes" view reached from the drawer/app launch.
+  final Board? board;
+
+  const NotesScreen({super.key, this.board});
 
   @override
   ConsumerState<NotesScreen> createState() => _NotesScreenState();
@@ -179,9 +191,14 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   void _clearSelection() => setState(_selectedIds.clear);
 
   List<Note> _filterNotes(List<Note> notes) {
-    if (_searchQuery.isEmpty) return notes;
+    final board = widget.board;
+    final inBoard = board == null
+        ? notes
+        : notes.where((n) => n.boardId == board.id).toList();
+
+    if (_searchQuery.isEmpty) return inBoard;
     final q = _searchQuery.toLowerCase();
-    return notes
+    return inBoard
         .where(
           (n) =>
               n.title.toLowerCase().contains(q) ||
@@ -314,6 +331,130 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     }
   }
 
+  /// Value this popup resolves to for its "New board" entry - distinct
+  /// from any real board id (those are UUIDs) and from "" (already meaning
+  /// "No board", same convention as NoteEditorScreen's own board picker).
+  static const _newBoardChoice = '__new_board__';
+
+  /// Same anchored-popup technique as color_picker_sheet.dart and
+  /// NoteEditorScreen's own board picker (which this otherwise mirrors) -
+  /// applies one chosen board (or "No board" to unfile) to every selected
+  /// note at once. Only shows a checkmark against a board every selected
+  /// note already shares - with a mixed selection, nothing is pre-marked,
+  /// since there's no single "current" answer to highlight.
+  Future<void> _moveSelectedToBoard(
+    BuildContext anchorContext,
+    List<Note> notes,
+  ) async {
+    final selected = notes.where((n) => _selectedIds.contains(n.id)).toList();
+    final boards = await ref.read(boardsProvider.future);
+    if (!mounted || !anchorContext.mounted) return;
+
+    // True only when every selected note already has exactly this board id
+    // (or, for null, is already unfiled) - with a mixed selection, nothing
+    // is pre-marked, since there's no single "current" answer to highlight.
+    bool allSelectedHave(String? boardId) =>
+        selected.isNotEmpty && selected.every((n) => n.boardId == boardId);
+
+    final overlay =
+        Overlay.of(anchorContext).context.findRenderObject() as RenderBox;
+    final button = anchorContext.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final choice = await showMenu<String>(
+      context: anchorContext,
+      position: position,
+      items: [
+        const PopupMenuItem(
+          key: Key('move_selected_to_board_new'),
+          value: _newBoardChoice,
+          child: ListTile(
+            leading: Icon(Icons.add),
+            title: Text('New board'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuDivider(),
+        if (boards.isEmpty)
+          const PopupMenuItem(
+            enabled: false,
+            child: Text(
+              'No boards yet',
+              style: TextStyle(fontStyle: FontStyle.italic),
+            ),
+          ),
+        PopupMenuItem(
+          key: const Key('move_selected_to_board_none'),
+          value: '',
+          child: ListTile(
+            leading: const Icon(Icons.close),
+            title: const Text('No board'),
+            trailing: allSelectedHave(null) ? const Icon(Icons.check) : null,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        for (final board in boards)
+          PopupMenuItem(
+            key: Key('move_selected_to_board_${board.id}'),
+            value: board.id,
+            child: ListTile(
+              leading: const Icon(Icons.dashboard_outlined),
+              title: Text(board.name),
+              trailing: allSelectedHave(board.id)
+                  ? const Icon(Icons.check)
+                  : null,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+      ],
+    );
+    if (choice == null || !mounted || !anchorContext.mounted) return;
+
+    final boardId = choice == _newBoardChoice
+        ? await _createBoard(anchorContext)
+        : choice;
+    if (boardId == null || !mounted) return;
+
+    final notifier = ref.read(notesProvider.notifier);
+    _clearSelection();
+    for (final note in selected) {
+      await notifier.addOrUpdate(
+        note.copyWith(boardId: boardId.isEmpty ? null : boardId),
+      );
+    }
+  }
+
+  /// Prompts for a name (same dialog BoardsScreen itself uses) and creates
+  /// the board, returning its new id - or null if the dialog was
+  /// cancelled/left blank, in which case the caller leaves the selection
+  /// untouched rather than unfiling it.
+  Future<String?> _createBoard(BuildContext context) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => const BoardNameDialog(title: 'New board'),
+    );
+    if (name == null || name.trim().isEmpty || !mounted) return null;
+
+    final now = DateTime.now();
+    final board = Board(
+      id: _uuid.v4(),
+      name: name.trim(),
+      created: now,
+      updated: now,
+    );
+    await ref.read(boardsProvider.notifier).addOrUpdate(board);
+    return board.id;
+  }
+
   /// A single selected note is saved as a plain .md file directly; more
   /// than one is bundled into a zip (see MarkdownExportService.toZip) since
   /// there's no reliably cross-platform way to write multiple files to a
@@ -382,7 +523,11 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: colorScheme.surfaceContainerLow,
-      drawer: _buildDrawer(context, notes),
+      // Omitted (not just unopenable) when viewing a single board - there's
+      // no hamburger button to open it anyway once leading below becomes a
+      // back arrow, and the drawer's own "All notes"/Boards/Reminders
+      // entries aren't meaningful shortcuts from inside a board's own view.
+      drawer: widget.board == null ? _buildDrawer(context, notes) : null,
       body: RefreshIndicator(
         key: const Key('notes_refresh_indicator'),
         // Same reconciliation as the "Sync now" button in Sync settings -
@@ -421,6 +566,12 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                       icon: Icon(Icons.close, color: iconColor),
                       tooltip: 'Cancel selection',
                       onPressed: _clearSelection,
+                    )
+                  : widget.board != null
+                  ? IconButton(
+                      icon: Icon(Icons.arrow_back, color: iconColor),
+                      tooltip: 'Back',
+                      onPressed: () => Navigator.pop(context),
                     )
                   : IconButton(
                       icon: Icon(Icons.menu, color: iconColor),
@@ -502,6 +653,17 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                           tooltip: 'Change color',
                           onPressed: () =>
                               _recolorSelected(paletteContext, notes),
+                        ),
+                      ),
+                      Builder(
+                        builder: (boardButtonContext) => IconButton(
+                          icon: Icon(
+                            Icons.dashboard_outlined,
+                            color: iconColor,
+                          ),
+                          tooltip: 'Move to board',
+                          onPressed: () =>
+                              _moveSelectedToBoard(boardButtonContext, notes),
                         ),
                       ),
                       IconButton(
@@ -605,6 +767,21 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                       ),
                     ],
             ),
+            // Only shown when scoped to a single board - "which notes am I
+            // even looking at" isn't otherwise answerable from this screen
+            // alone once the drawer (and so the launching BoardsScreen
+            // entry) is out of view, unlike the unscoped "All notes" case,
+            // which has no such ambiguity to begin with.
+            if (widget.board != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: Text(
+                    widget.board!.name,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ),
             notesAsync.when(
               loading: () => const SliverFillRemaining(
                 child: Center(child: CircularProgressIndicator()),
@@ -729,6 +906,18 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                       );
                     },
                   ),
+                  ListTile(
+                    key: const Key('boards_drawer_item'),
+                    leading: const Icon(Icons.dashboard_outlined),
+                    title: Text('Boards', style: itemStyle),
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const BoardsScreen()),
+                      );
+                    },
+                  ),
                   const Divider(height: 1),
                   const SectionLabel('Data'),
                   ListTile(
@@ -792,7 +981,16 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
   void _openNote(BuildContext context, WidgetRef ref, Note? note) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => NoteEditorScreen(existing: note)),
+      MaterialPageRoute(
+        builder: (_) => NoteEditorScreen(
+          existing: note,
+          // Only meaningful for a brand-new note (see NoteEditorScreen's
+          // own doc comment on initialBoardId) - creating one while
+          // viewing a specific board should file it there by default
+          // rather than leaving it unsorted.
+          initialBoardId: note == null ? widget.board?.id : null,
+        ),
+      ),
     ).then((_) => ref.invalidate(notesProvider));
   }
 

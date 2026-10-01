@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jotes/models/board.dart';
 import 'package:jotes/models/note.dart';
 import 'package:jotes/models/repeat_rule.dart';
+import 'package:jotes/providers/boards_provider.dart';
 import 'package:jotes/providers/note_toolbar_provider.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/note_editor_screen.dart';
@@ -69,6 +71,29 @@ class _RecordingNotesNotifier extends NotesNotifier {
   void pushRemoteUpdate(Note note) {
     state = AsyncData([note]);
   }
+}
+
+/// Same in-memory test double pattern as _RecordingNotesNotifier above -
+/// keeps _pickBoard's `ref.read(boardsProvider.future)` from touching real
+/// DbService I/O.
+class _FakeBoardsNotifier extends BoardsNotifier {
+  _FakeBoardsNotifier([this._boards = const []]);
+  final List<Board> _boards;
+  final List<Board> addedOrUpdated = [];
+
+  @override
+  Future<List<Board>> build() async => _boards;
+
+  @override
+  Future<void> addOrUpdate(Board board) async {
+    addedOrUpdated.add(board);
+    state = AsyncData([..._boards, board]);
+  }
+}
+
+Board _board({String id = 'b1', String name = 'Groceries'}) {
+  final now = DateTime.now();
+  return Board(id: id, name: name, created: now, updated: now);
 }
 
 /// Casts to reach the mutable view double flutter_test provides -
@@ -604,6 +629,213 @@ void _mainWidgetTests() {
       expect(notifier.saved.single.pinned, isFalse);
     },
   );
+
+  group('the overflow menu\'s "Move to board" option', () {
+    Future<ProviderContainer> pumpWithBoards(
+      WidgetTester tester,
+      Note note,
+      List<Board> boards,
+    ) async {
+      final notifier = _RecordingNotesNotifier([note]);
+      final container = ProviderContainer(
+        overrides: [
+          notesProvider.overrideWith(() => notifier),
+          boardsProvider.overrideWith(() => _FakeBoardsNotifier(boards)),
+        ],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: NoteEditorScreen(existing: note)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return container;
+    }
+
+    testWidgets(
+      'opens a popup menu listing "New board", "No board", and every board',
+      (tester) async {
+        await pumpWithBoards(tester, _existingNote(), [
+          _board(id: 'b1', name: 'Groceries'),
+          _board(id: 'b2', name: 'Work'),
+        ]);
+
+        await tester.tap(find.byKey(const Key('note_more_menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Move to board'));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('move_to_board_new')), findsOneWidget);
+        expect(find.text('New board'), findsOneWidget);
+        expect(find.byKey(const Key('move_to_board_none')), findsOneWidget);
+        expect(find.text('No board'), findsOneWidget);
+        expect(find.text('Groceries'), findsOneWidget);
+        expect(find.text('Work'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      '"New board" prompts for a name, creates it, and files this note '
+      'into it immediately - without having to leave the note first',
+      (tester) async {
+        final notifier = _RecordingNotesNotifier([_existingNote()]);
+        final boardsNotifier = _FakeBoardsNotifier([]);
+        final container = ProviderContainer(
+          overrides: [
+            notesProvider.overrideWith(() => notifier),
+            boardsProvider.overrideWith(() => boardsNotifier),
+          ],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: _existingNote())),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('note_more_menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Move to board'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('move_to_board_new')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('New board'), findsOneWidget);
+        expect(find.byKey(const Key('board_name_field')), findsOneWidget);
+        await tester.enterText(
+          find.byKey(const Key('board_name_field')),
+          'Chores',
+        );
+        await tester.tap(find.byKey(const Key('board_name_save')));
+        await tester.pumpAndSettle();
+
+        expect(boardsNotifier.addedOrUpdated.single.name, 'Chores');
+        expect(
+          notifier.saved.single.boardId,
+          boardsNotifier.addedOrUpdated.single.id,
+        );
+      },
+    );
+
+    testWidgets(
+      'when there are no boards yet, hints to create one instead of '
+      'showing an empty list',
+      (tester) async {
+        await pumpWithBoards(tester, _existingNote(), []);
+
+        await tester.tap(find.byKey(const Key('note_more_menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Move to board'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('No boards yet'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('move_to_board_none')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'the note\'s current board is marked with a checkmark',
+      (tester) async {
+        final note = _existingNote().copyWith(boardId: 'b1');
+        await pumpWithBoards(tester, note, [
+          _board(id: 'b1', name: 'Groceries'),
+          _board(id: 'b2', name: 'Work'),
+        ]);
+
+        await tester.tap(find.byKey(const Key('note_more_menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Move to board'));
+        await tester.pumpAndSettle();
+
+        final groceriesTile = tester.widget<ListTile>(
+          find.descendant(
+            of: find.byKey(const Key('move_to_board_b1')),
+            matching: find.byType(ListTile),
+          ),
+        );
+        final workTile = tester.widget<ListTile>(
+          find.descendant(
+            of: find.byKey(const Key('move_to_board_b2')),
+            matching: find.byType(ListTile),
+          ),
+        );
+        expect(groceriesTile.trailing, isNotNull);
+        expect(workTile.trailing, isNull);
+      },
+    );
+
+    testWidgets(
+      'choosing a board saves the note immediately with that board id',
+      (tester) async {
+        final notifier = _RecordingNotesNotifier([_existingNote()]);
+        final container = ProviderContainer(
+          overrides: [
+            notesProvider.overrideWith(() => notifier),
+            boardsProvider.overrideWith(
+              () => _FakeBoardsNotifier([_board(id: 'b1', name: 'Groceries')]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: _existingNote())),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('note_more_menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Move to board'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('move_to_board_b1')));
+        await tester.pumpAndSettle();
+
+        expect(notifier.saved.single.boardId, 'b1');
+      },
+    );
+
+    testWidgets(
+      '"No board" clears an already-filed note\'s board id',
+      (tester) async {
+        final note = _existingNote().copyWith(boardId: 'b1');
+        final notifier = _RecordingNotesNotifier([note]);
+        final container = ProviderContainer(
+          overrides: [
+            notesProvider.overrideWith(() => notifier),
+            boardsProvider.overrideWith(
+              () => _FakeBoardsNotifier([_board(id: 'b1', name: 'Groceries')]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: NoteEditorScreen(existing: note)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('note_more_menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Move to board'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('move_to_board_none')));
+        await tester.pumpAndSettle();
+
+        expect(notifier.saved.single.boardId, isNull);
+      },
+    );
+  });
 
   testWidgets(
     'the move-line toolbar buttons are disabled until the body is actively '

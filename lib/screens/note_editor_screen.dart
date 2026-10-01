@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
+import '../models/board.dart';
 import '../models/note.dart';
 import '../models/repeat_rule.dart';
+import '../providers/boards_provider.dart';
 import '../providers/note_toolbar_provider.dart';
 import '../providers/notes_provider.dart';
 import '../services/markdown_export_service.dart';
@@ -17,6 +19,7 @@ import '../services/notification_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_body_editor.dart';
 import '../widgets/note_link_picker.dart';
+import 'boards_screen.dart';
 import 'note_toolbar_settings_screen.dart';
 import 'reminder_edit_screen.dart';
 
@@ -33,11 +36,19 @@ class NoteEditorScreen extends ConsumerStatefulWidget {
   final String? initialTitle;
   final String? initialBody;
 
+  /// Pre-files a brand-new note into a board (only meaningful together
+  /// with existing: null, same as initialTitle/initialBody above) - set
+  /// when opened via the "+" button while viewing a specific board's own
+  /// notes (see NotesScreen._openNote), so the new note lands there
+  /// instead of unsorted.
+  final String? initialBoardId;
+
   const NoteEditorScreen({
     super.key,
     this.existing,
     this.initialTitle,
     this.initialBody,
+    this.initialBoardId,
   });
 
   @override
@@ -59,6 +70,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   String? _reminderSoundTitle;
   NotificationIconOption _reminderIcon = NotificationIconOption.defaultIcon;
   bool _pinned = false;
+  String? _boardId;
   bool _dirty = false;
   bool _saving = false;
 
@@ -88,6 +100,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     _repeatRule = n?.repeatRule;
     _repeatOccurrenceNumber = n?.repeatOccurrenceNumber ?? 1;
     _pinned = n?.pinned ?? false;
+    _boardId = n?.boardId ?? widget.initialBoardId;
     _lastKnownUpdated = n?.updated;
     // Generated once per editing session so repeated saves (e.g. multiple
     // back-button presses before the first save/pop completes) update the
@@ -152,6 +165,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       repeatRule: _repeatRule,
       repeatOccurrenceNumber: _repeatOccurrenceNumber,
       pinned: _pinned,
+      boardId: _boardId,
     );
   }
 
@@ -413,6 +427,121 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     await _save();
   }
 
+  /// Value _pickBoard's popup resolves to for its "+ New board" entry -
+  /// distinct from any real board id (those are UUIDs, see _uuid above)
+  /// and from "" (already meaning "No board" - see _boardId's own clearing
+  /// convention).
+  static const _newBoardChoice = '__new_board__';
+
+  /// Anchored right next to whichever widget triggered it (see
+  /// color_picker_sheet.dart's own doc comment for the same technique),
+  /// listing every board (plus "No board" to clear the current one, and
+  /// "+ New board" to create and immediately file into one without
+  /// leaving this screen) and assigning the choice immediately - same
+  /// "saves right away" reasoning as [_togglePinned]'s own doc comment,
+  /// since this also changes where the note shows up (out of whichever
+  /// board's own filtered view it used to be in).
+  Future<void> _pickBoard(BuildContext anchorContext) async {
+    final boards = await ref.read(boardsProvider.future);
+    if (!mounted || !anchorContext.mounted) return;
+
+    final overlay =
+        Overlay.of(anchorContext).context.findRenderObject() as RenderBox;
+    final button = anchorContext.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final choice = await showMenu<String>(
+      context: anchorContext,
+      position: position,
+      items: [
+        const PopupMenuItem(
+          key: Key('move_to_board_new'),
+          value: _newBoardChoice,
+          child: ListTile(
+            leading: Icon(Icons.add),
+            title: Text('New board'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuDivider(),
+        if (boards.isEmpty)
+          const PopupMenuItem(
+            enabled: false,
+            child: Text(
+              'No boards yet',
+              style: TextStyle(fontStyle: FontStyle.italic),
+            ),
+          ),
+        PopupMenuItem(
+          key: const Key('move_to_board_none'),
+          value: '',
+          child: ListTile(
+            leading: const Icon(Icons.close),
+            title: const Text('No board'),
+            trailing: _boardId == null ? const Icon(Icons.check) : null,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        for (final board in boards)
+          PopupMenuItem(
+            key: Key('move_to_board_${board.id}'),
+            value: board.id,
+            child: ListTile(
+              leading: const Icon(Icons.dashboard_outlined),
+              title: Text(board.name),
+              trailing: _boardId == board.id
+                  ? const Icon(Icons.check)
+                  : null,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+      ],
+    );
+    if (choice == null || !mounted || !anchorContext.mounted) return;
+
+    final boardId = choice == _newBoardChoice
+        ? await _createAndPickBoard(anchorContext)
+        : choice;
+    if (boardId == null || !mounted) return;
+
+    setState(() {
+      _boardId = boardId.isEmpty ? null : boardId;
+      _dirty = true;
+    });
+    await _save();
+  }
+
+  /// Prompts for a name (same dialog BoardsScreen itself uses) and creates
+  /// the board, returning its new id to file this note into - or null if
+  /// the dialog was cancelled/left blank, in which case _pickBoard leaves
+  /// the note's board untouched rather than clearing it.
+  Future<String?> _createAndPickBoard(BuildContext context) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => const BoardNameDialog(title: 'New board'),
+    );
+    if (name == null || name.trim().isEmpty || !mounted) return null;
+
+    final now = DateTime.now();
+    final board = Board(
+      id: _uuid.v4(),
+      name: name.trim(),
+      created: now,
+      updated: now,
+    );
+    await ref.read(boardsProvider.notifier).addOrUpdate(board);
+    return board.id;
+  }
+
   /// Opens the global (not per-note) toolbar order/visibility preferences
   /// - see NoteToolbarSettingsScreen. Nothing to apply on return: the
   /// bottom toolbar below already rebuilds on its own from
@@ -655,6 +784,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                   switch (value) {
                     case 'pin':
                       _togglePinned();
+                    case 'board':
+                      _pickBoard(menuButtonContext);
                     case 'color':
                       _pickColor(menuButtonContext);
                     case 'export':
@@ -677,6 +808,14 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
                         _pinned ? Icons.push_pin : Icons.push_pin_outlined,
                       ),
                       title: Text(_pinned ? 'Unpin' : 'Pin'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'board',
+                    child: ListTile(
+                      leading: Icon(Icons.dashboard_outlined),
+                      title: Text('Move to board'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),

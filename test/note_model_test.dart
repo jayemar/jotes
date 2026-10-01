@@ -11,6 +11,7 @@ Note _note({
   RepeatRule? repeatRule,
   int repeatOccurrenceNumber = 1,
   bool pinned = false,
+  String? boardId,
 }) {
   final now = DateTime.now();
   return Note(
@@ -24,6 +25,7 @@ Note _note({
     repeatRule: repeatRule,
     repeatOccurrenceNumber: repeatOccurrenceNumber,
     pinned: pinned,
+    boardId: boardId,
   );
 }
 
@@ -41,11 +43,12 @@ void main() {
       expect(_note(body: 'Milk, eggs').isEmpty, isFalse);
     });
 
-    test(
-        'false when only a reminder is set, with no title or body - '
+    test('false when only a reminder is set, with no title or body - '
         'a reminder-only note is meaningful and must not be treated as '
         'empty/discardable', () {
-      final note = _note(reminderAt: DateTime.now().add(const Duration(hours: 1)));
+      final note = _note(
+        reminderAt: DateTime.now().add(const Duration(hours: 1)),
+      );
       expect(note.isEmpty, isFalse);
     });
   });
@@ -275,10 +278,7 @@ void main() {
 
     test('fromPocketBase falls back to no rule for an empty repeat_rule '
         'value (an un-migrated or untouched server record)', () {
-      final restored = Note.fromPocketBase({
-        'id': 'n1',
-        'repeat_rule': '',
-      });
+      final restored = Note.fromPocketBase({'id': 'n1', 'repeat_rule': ''});
 
       expect(restored.repeatRule, isNull);
       expect(restored.repeatOccurrenceNumber, 1);
@@ -331,6 +331,77 @@ void main() {
       final restored = Note.fromPocketBase({'id': 'n1'});
 
       expect(restored.pinned, isFalse);
+    });
+  });
+
+  group('Note.boardId', () {
+    test('null (unsorted) by default', () {
+      expect(_note().boardId, isNull);
+    });
+
+    test('copyWith sets it independently of other fields', () {
+      final note = _note(boardId: null);
+      final filed = note.copyWith(boardId: 'board-1');
+
+      expect(filed.boardId, 'board-1');
+      expect(filed.title, note.title);
+    });
+
+    test('copyWith(boardId: null) explicitly un-files it, distinct from '
+        'not passing boardId at all', () {
+      final note = _note(boardId: 'board-1');
+
+      final untouched = note.copyWith(title: 'Renamed');
+      expect(untouched.boardId, 'board-1');
+
+      final unfiled = note.copyWith(boardId: null);
+      expect(unfiled.boardId, isNull);
+    });
+
+    test('round-trips through toMap/fromMap (local storage)', () {
+      final note = _note(boardId: 'board-1');
+
+      final restored = Note.fromMap(note.toMap());
+
+      expect(restored.boardId, 'board-1');
+    });
+
+    test('fromMap falls back to null for a note saved before this field '
+        'existed', () {
+      final map = _note(boardId: 'board-1').toMap()..remove('board_id');
+
+      final restored = Note.fromMap(map);
+
+      expect(restored.boardId, isNull);
+    });
+
+    test('round-trips through toPocketBase/fromPocketBase (server sync)', () {
+      final note = _note(boardId: 'board-1');
+
+      final restored = Note.fromPocketBase({
+        'id': note.id,
+        ...note.toPocketBase(),
+      });
+
+      expect(restored.boardId, 'board-1');
+    });
+
+    test('an unfiled note serializes board_id as an empty string, not '
+        'null, and reads back as null - PocketBase\'s own single-select '
+        'RelationField convention for "no relation"', () {
+      final note = _note();
+
+      expect(note.toPocketBase()['board_id'], '');
+
+      final restored = Note.fromPocketBase({'id': note.id, 'board_id': ''});
+      expect(restored.boardId, isNull);
+    });
+
+    test('fromPocketBase falls back to null for an un-migrated or '
+        'untouched server record with no board_id value', () {
+      final restored = Note.fromPocketBase({'id': 'n1'});
+
+      expect(restored.boardId, isNull);
     });
   });
 }

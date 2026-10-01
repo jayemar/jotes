@@ -1,5 +1,6 @@
 import 'package:pocketbase/pocketbase.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/board.dart';
 import '../models/note.dart';
 
 const _urlPrefsKey = 'pb_server_url';
@@ -147,6 +148,44 @@ class PbService {
     if (!isLoggedIn) return;
     try {
       await _client!.collection('notes').update(id, body: {'deleted': true});
+    } on ClientException catch (e) {
+      if (e.statusCode != 404) rethrow;
+    }
+  }
+
+  /// Board equivalents of [fetchAll]/[upsert]/[delete] above, against the
+  /// separate "boards" collection - same reasoning throughout (soft-delete
+  /// tombstone, update-then-create-on-404 upsert) as the note versions.
+  Future<List<Board>> fetchAllBoards() async {
+    if (!isLoggedIn) return [];
+    final records = await _client!.collection('boards').getFullList(
+      sort: '-updated',
+    );
+    return records.map((r) => Board.fromPocketBase(r.toJson())).toList();
+  }
+
+  Future<void> upsertBoard(Board board) async {
+    if (!isLoggedIn) return;
+    try {
+      await _client!.collection('boards').update(
+        board.id,
+        body: board.toPocketBase(),
+      );
+    } on ClientException catch (e) {
+      if (e.statusCode == 404) {
+        await _client!.collection('boards').create(
+          body: {'id': board.id, ...board.toPocketBase()},
+        );
+      } else {
+        rethrow;
+      }
+    }
+  }
+
+  Future<void> deleteBoard(String id) async {
+    if (!isLoggedIn) return;
+    try {
+      await _client!.collection('boards').update(id, body: {'deleted': true});
     } on ClientException catch (e) {
       if (e.statusCode != 404) rethrow;
     }

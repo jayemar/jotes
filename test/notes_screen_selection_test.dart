@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jotes/models/board.dart';
 import 'package:jotes/models/note.dart';
+import 'package:jotes/providers/boards_provider.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/notes_screen.dart';
 import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
-Note _note({required String title, int colorIndex = 0}) {
+Note _note({required String title, int colorIndex = 0, String? boardId}) {
   final now = DateTime.now();
   return Note(
     id: _uuid.v4(),
@@ -17,7 +19,31 @@ Note _note({required String title, int colorIndex = 0}) {
     colorIndex: colorIndex,
     created: now,
     updated: now,
+    boardId: boardId,
   );
+}
+
+Board _board({String id = 'b1', String name = 'Groceries'}) {
+  final now = DateTime.now();
+  return Board(id: id, name: name, created: now, updated: now);
+}
+
+/// Same in-memory test double pattern as boards_provider_test.dart - keeps
+/// _moveSelectedToBoard's `ref.read(boardsProvider.future)` (and its "New
+/// board" creation path) from touching real DbService I/O.
+class _FakeBoardsNotifier extends BoardsNotifier {
+  _FakeBoardsNotifier([this._boards = const []]);
+  final List<Board> _boards;
+  final List<Board> addedOrUpdated = [];
+
+  @override
+  Future<List<Board>> build() async => _boards;
+
+  @override
+  Future<void> addOrUpdate(Board board) async {
+    addedOrUpdated.add(board);
+    state = AsyncData([..._boards, board]);
+  }
 }
 
 /// Test double that keeps notes in memory only, so this file exercises the
@@ -53,10 +79,14 @@ class _FakeNotesNotifier extends NotesNotifier {
 
 Future<ProviderContainer> _pumpNotesScreen(
   WidgetTester tester,
-  List<Note> notes,
-) async {
+  List<Note> notes, {
+  List<Board> boards = const [],
+}) async {
   final container = ProviderContainer(
-    overrides: [notesProvider.overrideWith(() => _FakeNotesNotifier(notes))],
+    overrides: [
+      notesProvider.overrideWith(() => _FakeNotesNotifier(notes)),
+      boardsProvider.overrideWith(() => _FakeBoardsNotifier(boards)),
+    ],
   );
   addTearDown(container.dispose);
   await tester.pumpWidget(
@@ -268,5 +298,136 @@ void main() {
     expect(byTitle['Alpha'], 1);
     expect(byTitle['Beta'], 1);
     expect(byTitle['Gamma'], 0);
+  });
+
+  group('the "Move to board" selection action', () {
+    testWidgets('is offered alongside color/export/delete once selecting', (
+      tester,
+    ) async {
+      await _pumpNotesScreen(tester, [_note(title: 'Alpha')]);
+
+      await tester.longPress(find.text('Alpha'));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.dashboard_outlined), findsOneWidget);
+    });
+
+    testWidgets(
+      'opens a popup listing "New board", "No board", and every board',
+      (tester) async {
+        await _pumpNotesScreen(
+          tester,
+          [_note(title: 'Alpha')],
+          boards: [_board(id: 'b1', name: 'Groceries')],
+        );
+
+        await tester.longPress(find.text('Alpha'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.dashboard_outlined));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('move_selected_to_board_new')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('move_selected_to_board_none')),
+          findsOneWidget,
+        );
+        expect(find.text('Groceries'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'choosing a board files every selected note into it and clears the '
+      'selection',
+      (tester) async {
+        final container = await _pumpNotesScreen(
+          tester,
+          [
+            _note(title: 'Alpha'),
+            _note(title: 'Beta'),
+            _note(title: 'Gamma'),
+          ],
+          boards: [_board(id: 'b1', name: 'Groceries')],
+        );
+
+        await tester.longPress(find.text('Alpha'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Beta'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.dashboard_outlined));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('move_selected_to_board_b1')));
+        await tester.pumpAndSettle();
+
+        final notes = container.read(notesProvider).value!;
+        final byTitle = {for (final n in notes) n.title: n.boardId};
+        expect(byTitle['Alpha'], 'b1');
+        expect(byTitle['Beta'], 'b1');
+        expect(byTitle['Gamma'], isNull);
+        // The search field (not a plain "jotes" title) is now the app
+        // bar's default, non-selection-mode content.
+        expect(find.byKey(const Key('search_field')), findsOneWidget);
+      },
+    );
+
+    testWidgets('"No board" clears an already-filed selected note', (
+      tester,
+    ) async {
+      final container = await _pumpNotesScreen(
+        tester,
+        [_note(title: 'Alpha', boardId: 'b1')],
+        boards: [_board(id: 'b1', name: 'Groceries')],
+      );
+
+      await tester.longPress(find.text('Alpha'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.dashboard_outlined));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('move_selected_to_board_none')));
+      await tester.pumpAndSettle();
+
+      final notes = container.read(notesProvider).value!;
+      expect(notes.single.boardId, isNull);
+    });
+
+    testWidgets(
+      '"New board" prompts for a name, creates it, and files every '
+      'selected note into it',
+      (tester) async {
+        final container = await _pumpNotesScreen(tester, [
+          _note(title: 'Alpha'),
+          _note(title: 'Beta'),
+        ]);
+
+        await tester.longPress(find.text('Alpha'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Beta'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.dashboard_outlined));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('move_selected_to_board_new')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('board_name_field')),
+          'Chores',
+        );
+        await tester.tap(find.byKey(const Key('board_name_save')));
+        await tester.pumpAndSettle();
+
+        final boardsNotifier =
+            container.read(boardsProvider.notifier) as _FakeBoardsNotifier;
+        expect(boardsNotifier.addedOrUpdated.single.name, 'Chores');
+        final newBoardId = boardsNotifier.addedOrUpdated.single.id;
+
+        final notes = container.read(notesProvider).value!;
+        expect(notes.every((n) => n.boardId == newBoardId), isTrue);
+      },
+    );
   });
 }

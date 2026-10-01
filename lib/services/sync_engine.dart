@@ -28,6 +28,13 @@ Future<void> mergeSync() async {
     // function exists for must proceed regardless.
   }
 
+  // Boards first, not after notes - a note pulled in below with a boardId
+  // pointing at a board only just about to be created locally would
+  // otherwise briefly reference one DbService doesn't have yet (harmless
+  // in practice, since nothing reads it before this function returns, but
+  // keeping cause before effect here avoids relying on that).
+  await _mergeBoards();
+
   final local = await DbService.instance.getAll();
   final localById = {for (final n in local) n.id: n};
   final remote = await PbService.instance.fetchAll();
@@ -74,4 +81,34 @@ Future<void> mergeSync() async {
   // showing stale data until the app is next foregrounded. NotesNotifier
   // .build() covers every other path (see notes_provider.dart).
   await WidgetService.instance.syncAll(await DbService.instance.getAll());
+}
+
+/// Same newer-wins-by-`updated`/local-only-gets-pushed reconciliation as
+/// [mergeSync] runs for notes, just for boards instead - see that
+/// function's own doc comment for why each side is handled the way it is.
+/// No notification/widget bookkeeping to redo here (boards carry none),
+/// so this is the note version stripped down to just the two merge loops.
+Future<void> _mergeBoards() async {
+  final local = await DbService.instance.getAllBoards();
+  final localById = {for (final b in local) b.id: b};
+  final remote = await PbService.instance.fetchAllBoards();
+  final remoteById = {for (final b in remote) b.id: b};
+
+  for (final r in remote) {
+    final l = localById[r.id];
+    if (l == null || l.updated.isBefore(r.updated)) {
+      if (r.deleted) {
+        await DbService.instance.deleteBoard(r.id);
+      } else {
+        await DbService.instance.upsertBoard(r);
+      }
+    }
+  }
+
+  for (final l in local) {
+    final r = remoteById[l.id];
+    if (r == null || l.updated.isAfter(r.updated)) {
+      await PbService.instance.upsertBoard(l);
+    }
+  }
 }

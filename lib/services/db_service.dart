@@ -3,6 +3,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sembast/sembast_io.dart';
 import 'package:sembast_web/sembast_web.dart';
+import '../models/board.dart';
 import '../models/note.dart';
 
 class DbService {
@@ -10,6 +11,7 @@ class DbService {
   DbService._();
 
   static final _store = StoreRef<String, Map<String, Object?>>('notes');
+  static final _boardsStore = StoreRef<String, Map<String, Object?>>('boards');
 
   Database? _db;
 
@@ -90,5 +92,24 @@ class DbService {
   Future<void> delete(String id) async {
     final db = await _database;
     await _store.record(id).delete(db);
+  }
+
+  Future<List<Board>> getAllBoards() async {
+    final db = await _database;
+    final records = await _boardsStore.find(
+      db,
+      finder: Finder(sortOrders: [SortOrder('name')]),
+    );
+    return records.map((r) => Board.fromMap(r.value)).toList();
+  }
+
+  Future<void> upsertBoard(Board board) async {
+    final db = await _database;
+    await _boardsStore.record(board.id).put(db, board.toMap());
+  }
+
+  Future<void> deleteBoard(String id) async {
+    final db = await _database;
+    await _boardsStore.record(id).delete(db);
   }
 }

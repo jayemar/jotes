@@ -108,6 +108,12 @@ class Note {
   /// pins everywhere.
   final bool pinned;
 
+  /// The [Board] this note is filed under, or null for "unsorted" - a
+  /// note belongs to at most one board (see board.dart's own doc comment
+  /// for why this isn't a set of ids). Synced like any other field, so
+  /// filing a note into a board on one device moves it there everywhere.
+  final String? boardId;
+
   const Note({
     required this.id,
     this.title = '',
@@ -121,6 +127,7 @@ class Note {
     this.repeatRule,
     this.repeatOccurrenceNumber = 1,
     this.pinned = false,
+    this.boardId,
   });
 
   bool get isEmpty => title.isEmpty && body.isEmpty && reminderAt == null;
@@ -137,6 +144,7 @@ class Note {
     Object? repeatRule = _sentinel,
     int? repeatOccurrenceNumber,
     bool? pinned,
+    Object? boardId = _sentinel,
   }) {
     return Note(
       id: id,
@@ -155,6 +163,9 @@ class Note {
       repeatOccurrenceNumber:
           repeatOccurrenceNumber ?? this.repeatOccurrenceNumber,
       pinned: pinned ?? this.pinned,
+      boardId: identical(boardId, _sentinel)
+          ? this.boardId
+          : boardId as String?,
     );
   }
 
@@ -170,6 +181,7 @@ class Note {
     'repeat_rule': repeatRule == null ? null : jsonEncode(repeatRule!.toJson()),
     'repeat_occurrence_number': repeatOccurrenceNumber,
     'pinned': pinned,
+    'board_id': boardId,
   };
 
   factory Note.fromMap(Map<String, dynamic> map) => Note(
@@ -186,6 +198,7 @@ class Note {
     repeatRule: RepeatRule.fromJson(map['repeat_rule'] as String?),
     repeatOccurrenceNumber: (map['repeat_occurrence_number'] as int?) ?? 1,
     pinned: (map['pinned'] as bool?) ?? false,
+    boardId: map['board_id'] as String?,
   );
 
   Map<String, dynamic> toPocketBase() => {
@@ -201,6 +214,12 @@ class Note {
     'repeat_rule': repeatRule == null ? '' : jsonEncode(repeatRule!.toJson()),
     'repeat_occurrence_number': repeatOccurrenceNumber,
     'pinned': pinned,
+    // Empty string clears the relation - same convention as reminder_at/
+    // repeat_rule above for "no value", and how PocketBase's own
+    // RelationField (single-select) accepts a plain record id string
+    // rather than requiring an array (see push_subscriptions' own "user"
+    // field, set the same way in pb_service.dart).
+    'board_id': boardId ?? '',
   };
 
   factory Note.fromPocketBase(Map<String, dynamic> r) {
@@ -226,6 +245,9 @@ class Note {
       repeatOccurrenceNumber:
           (r['repeat_occurrence_number'] as num?)?.toInt() ?? 1,
       pinned: r['pinned'] == true,
+      boardId: ((r['board_id'] as String?) ?? '').isEmpty
+          ? null
+          : r['board_id'] as String,
     );
   }
 }
