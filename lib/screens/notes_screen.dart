@@ -667,7 +667,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                         ),
                       ),
                       IconButton(
-                        icon: Icon(Icons.folder_zip_outlined, color: iconColor),
+                        icon: Icon(Icons.ios_share_outlined, color: iconColor),
                         tooltip: 'Export as Markdown',
                         onPressed: () => _exportSelectedToMarkdown(notes),
                       ),
@@ -939,7 +939,7 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   ),
                   ListTile(
                     key: const Key('export_markdown_item'),
-                    leading: const Icon(Icons.folder_zip_outlined),
+                    leading: const Icon(Icons.ios_share_outlined),
                     title: Text('Export to Markdown', style: itemStyle),
                     subtitle: const Text('All notes, as a .zip'),
                     onTap: () {
