@@ -231,6 +231,12 @@ class MainActivity : FlutterActivity() {
         // below, pushed to Dart as an "onSharedText" call on this same
         // channel rather than something Dart has to poll for.
         "getInitialSharedText" -> result.success(extractShare(intent))
+        "shareText" -> {
+          @Suppress("UNCHECKED_CAST")
+          val args = call.arguments as Map<String, String?>
+          shareText(args["text"], args["subject"])
+          result.success(null)
+        }
         else -> result.notImplemented()
       }
     }
@@ -331,6 +337,39 @@ class MainActivity : FlutterActivity() {
           // as an error, same reasoning as listNotificationSounds above.
           null
         }
+  }
+
+  /**
+   * Shares plain text to another app via the system chooser, implemented
+   * directly (rather than via the share_plus plugin) specifically to avoid
+   * FLAG_ACTIVITY_NEW_TASK: share_plus's own chooser always launches via
+   * startActivityForResult (so it can report back which app the user
+   * picked), and Android ignores a target activity's own singleTask/
+   * singleInstance launch mode for anything started that way - forcing
+   * the chosen app into *this* task instead of its own. That's externally
+   * confirmed as a known share_plus limitation (e.g. the Joplin project
+   * hit the identical bug: github.com/laurent22/joplin/issues/16241),
+   * reproduced here as: sharing a note to Obsidian left Android's Recents
+   * entry showing "jotes" the whole time, and backing out of Obsidian
+   * took two presses that both read as "closing jotes" - compared with
+   * sharing the same way from Firefox, where Obsidian got its own,
+   * correctly-labeled Recents entry. Not needing a result callback at all
+   * (nothing in jotes reads one), the fix is just to never ask for one:
+   * createChooser plus a plain startActivity (no ForResult), with
+   * FLAG_ACTIVITY_NEW_TASK so the chosen app can set up its own task the
+   * way its own manifest already intends.
+   */
+  private fun shareText(text: String?, subject: String?) {
+    if (text.isNullOrBlank()) return
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+      type = "text/plain"
+      putExtra(Intent.EXTRA_TEXT, text)
+      if (!subject.isNullOrBlank()) putExtra(Intent.EXTRA_SUBJECT, subject)
+    }
+    val chooserIntent = Intent.createChooser(sendIntent, null).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    startActivity(chooserIntent)
   }
 
   private fun extractShare(intent: Intent?): Map<String, String>? {

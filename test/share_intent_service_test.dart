@@ -70,6 +70,38 @@ void main() {
     });
   });
 
+  group('ShareIntentService.shareText', () {
+    test('invokes the native "shareText" method with text and subject', () async {
+      MethodCall? received;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        received = call;
+        return null;
+      });
+
+      await ShareIntentService.instance.shareText(
+        text: 'note body',
+        subject: 'note title',
+      );
+
+      expect(received!.method, 'shareText');
+      expect(received!.arguments, {'text': 'note body', 'subject': 'note title'});
+    });
+
+    test('omits the subject key entirely when none is given - distinct '
+        'from sending an explicit null', () async {
+      MethodCall? received;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        received = call;
+        return null;
+      });
+
+      await ShareIntentService.instance.shareText(text: 'note body');
+
+      expect(received!.arguments, {'text': 'note body'});
+      expect((received!.arguments as Map).containsKey('subject'), isFalse);
+    });
+  });
+
   group('ShareIntentService.onSharedText', () {
     test('fires when the native side calls onSharedText - a share arriving '
         'while jotes is already running', () async {

@@ -5,7 +5,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../models/board.dart';
 import '../models/note.dart';
@@ -16,6 +15,7 @@ import '../providers/notes_provider.dart';
 import '../services/markdown_export_service.dart';
 import '../services/notification_appearance_settings.dart';
 import '../services/notification_service.dart';
+import '../services/share_intent_service.dart';
 import '../widgets/color_picker_sheet.dart';
 import '../widgets/note_body_editor.dart';
 import '../widgets/note_link_picker.dart';
@@ -571,13 +571,16 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   /// same content/format as [_exportToMarkdown] (reusing
   /// MarkdownExportService.toMarkdown - one place decides how a note
   /// renders as text, whether it leaves the app as a .md file or a share
-  /// intent) rather than opening a file picker.
+  /// intent) rather than opening a file picker. Goes through
+  /// ShareIntentService's own native implementation rather than the
+  /// share_plus package - see its shareText doc comment for why.
   Future<void> _shareNote() async {
     final note = _buildNote();
     final text = MarkdownExportService.instance.toMarkdown(note);
     if (text.trim().isEmpty) return;
-    await SharePlus.instance.share(
-      ShareParams(text: text, subject: note.title.isEmpty ? null : note.title),
+    await ShareIntentService.instance.shareText(
+      text: text,
+      subject: note.title.isEmpty ? null : note.title,
     );
   }
 

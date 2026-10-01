@@ -77,4 +77,20 @@ class ShareIntentService {
       return null;
     }
   }
+
+  /// Shares [text] to another app via the system chooser - implemented
+  /// natively (MainActivity.kt's own shareText) rather than via the
+  /// share_plus package, specifically to avoid a same-task bug that
+  /// package's own result-tracking chooser has: launched from a note,
+  /// sharing to e.g. Obsidian left it stuck inside jotes' own Recents
+  /// entry/back stack instead of getting its own task, the way sharing
+  /// the same content from, say, Firefox correctly does. See
+  /// MainActivity.kt's shareText for the full explanation.
+  Future<void> shareText({required String text, String? subject}) async {
+    if (kIsWeb) return;
+    await _channel.invokeMethod('shareText', {
+      'text': text,
+      'subject': ?subject,
+    });
+  }
 }
