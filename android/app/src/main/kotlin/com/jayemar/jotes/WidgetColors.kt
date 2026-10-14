@@ -32,6 +32,21 @@ fun noteColorProvider(colorIndex: Int): GlanceColorProvider {
 val noteTextColorProvider: GlanceColorProvider =
     ColorProvider(day = Color(0xFF202124), night = Color(0xFFE8EAED))
 
+// A checked checklist item's own box fill/check-mark colors, matching the
+// in-app Checkbox's own look (NoteBodyView) exactly rather than the plain
+// "☑" Unicode glyph SingleNoteWidget otherwise uses for this - most fonts
+// render that glyph as a thin outline with a small check inside, not the
+// solid filled box + inverse-color check Flutter's own Material Checkbox
+// draws, which read as "doesn't stand out" next to the real app. These are
+// ColorScheme.fromSeed(seedColor: Color(0xFF1A73E8))'s own .primary/
+// .onPrimary for each brightness (see main.dart's own lightBase/darkBase) -
+// hand-copied rather than computed here, since this widget has no access
+// to that Dart-side seed algorithm at all.
+val checkedBoxColorProvider: GlanceColorProvider =
+    ColorProvider(day = Color(0xFF435E91), night = Color(0xFFADC7FF))
+val checkedBoxCheckColorProvider: GlanceColorProvider =
+    ColorProvider(day = Color(0xFFFFFFFF), night = Color(0xFF0F2F60))
+
 // Same fixed link-blue convention as note_editor_screen.dart's own
 // linkColor (Colors.blue / Colors.lightBlueAccent) - see its comment for
 // why this doesn't derive from the note's own background color. Used by

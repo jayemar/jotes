@@ -13,12 +13,14 @@ import androidx.glance.action.Action
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.lazy.itemsIndexed
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.currentState
 import androidx.glance.layout.Alignment
+import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
@@ -26,6 +28,7 @@ import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.size
 import androidx.glance.layout.width
 import androidx.glance.text.FontFamily
 import androidx.glance.text.FontStyle
@@ -259,10 +262,30 @@ class SingleNoteWidget : GlanceAppWidget() {
         // modifier to do this more precisely.
         verticalAlignment = Alignment.Vertical.Bottom,
     ) {
-      Text(
-          text = if (block.checked) "☑" else "☐",
-          style = TextStyle(color = noteTextColorProvider, fontSize = 16.sp),
-      )
+      if (block.checked) {
+        // A real filled box + inverse-color check, matching the in-app
+        // Checkbox's own checked look (see checkedBoxColorProvider's own
+        // doc comment) - the plain "☑" glyph this replaces rendered as a
+        // thin outline with a small check in most fonts, not solid, so a
+        // checked item didn't stand out here the way it does in the app.
+        Box(
+            modifier = GlanceModifier
+                .size(16.dp)
+                .background(checkedBoxColorProvider)
+                .cornerRadius(3.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+          Text(
+              text = "✓",
+              style = TextStyle(color = checkedBoxCheckColorProvider, fontSize = 11.sp),
+          )
+        }
+      } else {
+        Text(
+            text = "☐",
+            style = TextStyle(color = noteTextColorProvider, fontSize = 16.sp),
+        )
+      }
       Spacer(modifier = GlanceModifier.width(6.dp))
       Text(
           text = block.text,
