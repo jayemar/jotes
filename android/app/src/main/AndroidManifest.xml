@@ -6,6 +6,12 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets jotes create/update/delete calendar events mirroring a
+         note's own reminder (see CalendarSyncService) - opt-in, off by
+         default, and only ever requested the first time the user actually
+         turns the Settings toggle on. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
     <application
         android:label="jotes"

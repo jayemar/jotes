@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/note.dart';
+import '../services/calendar_sync_service.dart';
 import '../services/db_service.dart';
 import '../services/notification_appearance_settings.dart';
 import '../services/notification_service.dart';
@@ -42,6 +43,12 @@ class NotesNotifier extends AsyncNotifier<List<Note>> {
       previous,
       note,
     );
+    try {
+      await CalendarSyncService.instance.reconcile(previous, note);
+    } catch (_) {
+      // Best-effort, same reasoning as the notification reconcile above -
+      // the note itself is already saved regardless.
+    }
 
     PbService.instance.upsert(note).ignore();
 
@@ -81,6 +88,10 @@ class NotesNotifier extends AsyncNotifier<List<Note>> {
     // notification cancel above.
     try {
       await NotificationAppearanceSettings.instance.clearForNote(note.id);
+    } catch (_) {}
+
+    try {
+      await CalendarSyncService.instance.removeForNote(note);
     } catch (_) {}
 
     PbService.instance.delete(note.id).ignore();

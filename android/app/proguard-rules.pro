@@ -26,3 +26,8 @@
 # Retain generic signatures of TypeToken and its subclasses with R8 version 3.0 and higher.
 -keep,allowobfuscation,allowshrinking class com.google.gson.reflect.TypeToken
 -keep,allowobfuscation,allowshrinking class * extends com.google.gson.reflect.TypeToken
+
+# device_calendar's own documented requirement - without this, R8 strips
+# methods retrieveCalendars() (and others) reflectively depend on, breaking
+# them in a release build specifically (never shows up in a debug run).
+-keep class com.builttoroam.devicecalendar.** { *; }

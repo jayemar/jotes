@@ -2,6 +2,7 @@ import 'dart:io' show HandshakeException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pocketbase/pocketbase.dart' show ClientException;
 import '../models/note.dart';
+import '../services/calendar_sync_service.dart';
 import '../services/db_service.dart';
 import '../services/notification_service.dart';
 import '../services/pb_service.dart';
@@ -131,6 +132,9 @@ class SyncNotifier extends Notifier<SyncState> {
       } catch (_) {
         // Not fatal - the note is already deleted either way.
       }
+      try {
+        await CalendarSyncService.instance.removeForNote(note);
+      } catch (_) {}
     } else {
       final previous = await DbService.instance.getById(note.id);
       await DbService.instance.upsert(note);
@@ -139,6 +143,9 @@ class SyncNotifier extends Notifier<SyncState> {
       // edit to an unrelated field must not cancel an already-fired
       // reminder just because this note happened to sync.
       await NotificationService.instance.reconcile(previous, note);
+      try {
+        await CalendarSyncService.instance.reconcile(previous, note);
+      } catch (_) {}
     }
 
     ref.invalidate(notesProvider);

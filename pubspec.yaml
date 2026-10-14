@@ -14,7 +14,7 @@ publish_to: 'none'
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.29.0+99
+version: 1.30.0+100
 
 environment:
   sdk: ^3.12.2
@@ -51,6 +51,7 @@ dependencies:
   home_widget: ^0.9.3
   url_launcher: ^6.3.2
   workmanager: ^0.10.9
+  device_calendar: ^4.3.3
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +59,16 @@ dev_dependencies:
 
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
+
+# device_calendar 4.3.3 itself declares timezone ^0.9.0, which the solver
+# otherwise refuses to let coexist with jotes' own ^0.10.0 (used throughout
+# notification_service.dart's reminder scheduling) - TZDateTime's own API
+# hasn't changed between those versions, so forcing 0.10.x here is safe in
+# practice; downgrading jotes' own timezone dependency instead was the
+# other option, but that's the one actually exercised everywhere in this
+# app, not device_calendar's comparatively small usage of it.
+dependency_overrides:
+  timezone: ^0.10.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

@@ -1,3 +1,4 @@
+import 'calendar_sync_service.dart';
 import 'db_service.dart';
 import 'notification_service.dart';
 import 'pb_service.dart';
@@ -60,6 +61,9 @@ Future<void> mergeSync() async {
         } catch (_) {
           // Not fatal - the note is already deleted either way.
         }
+        try {
+          await CalendarSyncService.instance.removeForNote(r);
+        } catch (_) {}
       } else {
         await DbService.instance.upsert(r);
         // Only touches this note's notification if its reminder actually
@@ -68,6 +72,9 @@ Future<void> mergeSync() async {
         // device was offline when it happened) would silently never reach
         // this device's own alarm/tray state at all.
         await NotificationService.instance.reconcile(l, r);
+        try {
+          await CalendarSyncService.instance.reconcile(l, r);
+        } catch (_) {}
       }
     }
   }

@@ -1,11 +1,15 @@
+import 'package:device_calendar/device_calendar.dart' show Calendar;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jotes/providers/theme_provider.dart';
 import 'package:jotes/screens/settings_screen.dart';
+import 'package:jotes/services/calendar_sync_service.dart';
+import 'package:jotes/services/db_service.dart';
 import 'package:jotes/services/periodic_refresh_settings.dart';
 import 'package:jotes/services/snooze_settings.dart';
+import 'package:sembast/sembast_memory.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<ProviderContainer> _pumpSettingsScreen(WidgetTester tester) async {
@@ -21,6 +25,19 @@ Future<ProviderContainer> _pumpSettingsScreen(WidgetTester tester) async {
   return container;
 }
 
+/// Scrolls the settings list until [key] is actually built/visible - it's
+/// the last item on the screen, and the list is lazy (only builds what's
+/// within or near the viewport), so a plain pumpAndSettle alone never
+/// brings it into the tree on the default (short) test surface.
+Future<void> _scrollUntilVisible(WidgetTester tester, Key key) async {
+  await tester.dragUntilVisible(
+    find.byKey(key),
+    find.byKey(const Key('settings_list')),
+    const Offset(0, -200),
+  );
+  await tester.pumpAndSettle();
+}
+
 /// Opens a DropdownMenu and taps the entry matching [label]. Unlike the old
 /// DropdownButton, DropdownMenu's closed field also displays the current
 /// selection as literal text, so there can be two matches once the menu is
@@ -34,6 +51,14 @@ Future<void> _choose(WidgetTester tester, Key dropdownKey, String label) async {
 }
 
 void main() {
+  // The calendar sync setting's "turn on" flow reads DbService.getAll()
+  // for its backfill - real sembast file I/O doesn't resolve within
+  // flutter_test's fake-async pump cycle (same lesson as
+  // notes_provider_test.dart), so it hangs pumpAndSettle without this.
+  setUpAll(() {
+    DbService.instance.debugFactory = databaseFactoryMemory;
+  });
+
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
@@ -324,5 +349,179 @@ void main() {
         );
       },
     );
+  });
+
+  group('calendar sync setting', () {
+    tearDown(() {
+      CalendarSyncService.instance.debugRequestPermission = null;
+      CalendarSyncService.instance.debugAvailableCalendars = null;
+      CalendarSyncService.instance.debugCreateOrUpdateEvent = null;
+      CalendarSyncService.instance.debugDeleteEvent = null;
+    });
+
+    testWidgets('defaults to off, with no Calendar row shown', (
+      tester,
+    ) async {
+      await _pumpSettingsScreen(tester);
+      await _scrollUntilVisible(tester, const Key('calendar_sync_setting'));
+
+      final tile = tester.widget<SwitchListTile>(
+        find.byKey(const Key('calendar_sync_setting')),
+      );
+      expect(tile.value, isFalse);
+      expect(
+        find.byKey(const Key('calendar_sync_calendar_tile')),
+        findsNothing,
+      );
+    });
+
+    testWidgets(
+      'turning it on without calendar permission shows a message and '
+      'leaves it off',
+      (tester) async {
+        CalendarSyncService.instance.debugRequestPermission =
+            () async => false;
+        await _pumpSettingsScreen(tester);
+        await _scrollUntilVisible(tester, const Key('calendar_sync_setting'));
+
+        await tester.tap(find.byKey(const Key('calendar_sync_setting')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text("jotes wasn't granted calendar permission."),
+          findsOneWidget,
+        );
+        final tile = tester.widget<SwitchListTile>(
+          find.byKey(const Key('calendar_sync_setting')),
+        );
+        expect(tile.value, isFalse);
+        expect(await CalendarSyncService.instance.isEnabled(), isFalse);
+      },
+    );
+
+    testWidgets(
+      'turning it on with no writable calendars shows a message and '
+      'leaves it off',
+      (tester) async {
+        CalendarSyncService.instance.debugRequestPermission =
+            () async => true;
+        CalendarSyncService.instance.debugAvailableCalendars =
+            () async => [];
+        await _pumpSettingsScreen(tester);
+        await _scrollUntilVisible(tester, const Key('calendar_sync_setting'));
+
+        await tester.tap(find.byKey(const Key('calendar_sync_setting')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('No writable calendars were found on this device.'),
+          findsOneWidget,
+        );
+        expect(await CalendarSyncService.instance.isEnabled(), isFalse);
+      },
+    );
+
+    testWidgets(
+      'turning it on opens a picker; choosing a calendar enables sync and '
+      'shows it in the Calendar row',
+      (tester) async {
+        CalendarSyncService.instance.debugRequestPermission =
+            () async => true;
+        CalendarSyncService.instance.debugAvailableCalendars = () async => [
+          Calendar(id: 'cal-1', name: 'Personal', isReadOnly: false),
+          Calendar(id: 'cal-2', name: 'Work', isReadOnly: false),
+        ];
+        CalendarSyncService.instance.debugCreateOrUpdateEvent =
+            (event) async => 'event-1';
+        await _pumpSettingsScreen(tester);
+        await _scrollUntilVisible(tester, const Key('calendar_sync_setting'));
+
+        await tester.tap(find.byKey(const Key('calendar_sync_setting')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('calendar_sync_option_cal-1')), findsOneWidget);
+        expect(find.byKey(const Key('calendar_sync_option_cal-2')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('calendar_sync_option_cal-1')));
+        await tester.pumpAndSettle();
+
+        final tile = tester.widget<SwitchListTile>(
+          find.byKey(const Key('calendar_sync_setting')),
+        );
+        expect(tile.value, isTrue);
+        expect(await CalendarSyncService.instance.isEnabled(), isTrue);
+        expect(
+          await CalendarSyncService.instance.selectedCalendarId(),
+          'cal-1',
+        );
+        expect(find.text('Personal'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'tapping the Calendar row lets you switch to a different calendar',
+      (tester) async {
+        CalendarSyncService.instance.debugRequestPermission =
+            () async => true;
+        CalendarSyncService.instance.debugAvailableCalendars = () async => [
+          Calendar(id: 'cal-1', name: 'Personal', isReadOnly: false),
+          Calendar(id: 'cal-2', name: 'Work', isReadOnly: false),
+        ];
+        CalendarSyncService.instance.debugCreateOrUpdateEvent =
+            (event) async => 'event-1';
+        await _pumpSettingsScreen(tester);
+        await _scrollUntilVisible(tester, const Key('calendar_sync_setting'));
+        await tester.tap(find.byKey(const Key('calendar_sync_setting')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('calendar_sync_option_cal-1')));
+        await tester.pumpAndSettle();
+        await _scrollUntilVisible(
+          tester,
+          const Key('calendar_sync_calendar_tile'),
+        );
+
+        await tester.tap(find.byKey(const Key('calendar_sync_calendar_tile')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('calendar_sync_option_cal-2')));
+        await tester.pumpAndSettle();
+
+        expect(
+          await CalendarSyncService.instance.selectedCalendarId(),
+          'cal-2',
+        );
+        expect(find.text('Work'), findsOneWidget);
+      },
+    );
+
+    testWidgets('turning it off disables sync and hides the Calendar row', (
+      tester,
+    ) async {
+      CalendarSyncService.instance.debugRequestPermission =
+          () async => true;
+      CalendarSyncService.instance.debugAvailableCalendars = () async => [
+        Calendar(id: 'cal-1', name: 'Personal', isReadOnly: false),
+      ];
+      CalendarSyncService.instance.debugCreateOrUpdateEvent =
+          (event) async => 'event-1';
+      await _pumpSettingsScreen(tester);
+      await _scrollUntilVisible(tester, const Key('calendar_sync_setting'));
+      await tester.tap(find.byKey(const Key('calendar_sync_setting')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('calendar_sync_option_cal-1')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('calendar_sync_setting')));
+      await tester.pumpAndSettle();
+
+      final tile = tester.widget<SwitchListTile>(
+        find.byKey(const Key('calendar_sync_setting')),
+      );
+      expect(tile.value, isFalse);
+      expect(
+        find.byKey(const Key('calendar_sync_calendar_tile')),
+        findsNothing,
+      );
+      expect(await CalendarSyncService.instance.isEnabled(), isFalse);
+    });
   });
 }
