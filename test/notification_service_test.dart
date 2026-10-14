@@ -332,6 +332,7 @@ void main() {
         stored.reminderAt!.millisecondsSinceEpoch,
         note.reminderAt!.millisecondsSinceEpoch,
       );
+      expect(stored.reminderHandledAt, isNotNull);
     });
 
     test('Dismiss for a repeating reminder rolls reminderAt forward to its '
@@ -425,6 +426,7 @@ void main() {
       expect(scheduled, hasLength(1));
       expect(scheduled.single.id, 'snooze-default');
       expect(stored.reminderResolved, isFalse);
+      expect(stored.reminderHandledAt, isNotNull);
     });
 
     test('Snooze respects a configured custom delay', () async {

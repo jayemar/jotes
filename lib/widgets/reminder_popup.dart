@@ -115,10 +115,15 @@ Future<void> _snooze(BuildContext context, WidgetRef ref, Note note) async {
   // for the fresh cycle.) Synced (not the old local-only
   // markReminderResolved) for the same cross-device reason as the Dismiss
   // button above - see Note.reminderResolved's own doc comment.
+  final snoozedAt = DateTime.now();
   await ref
       .read(notesProvider.notifier)
       .addOrUpdate(
-        note.copyWith(reminderResolved: true, updated: DateTime.now()),
+        note.copyWith(
+          reminderResolved: true,
+          updated: snoozedAt,
+          reminderHandledAt: snoozedAt,
+        ),
       );
 
   if (!context.mounted) return;
@@ -154,6 +159,7 @@ Future<void> _snooze(BuildContext context, WidgetRef ref, Note note) async {
           reminderAt: newReminderAt,
           reminderResolved: false,
           updated: DateTime.now(),
+          reminderHandledAt: snoozedAt,
         ),
       );
 }

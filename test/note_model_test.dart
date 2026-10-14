@@ -12,6 +12,7 @@ Note _note({
   int repeatOccurrenceNumber = 1,
   bool pinned = false,
   String? boardId,
+  DateTime? reminderHandledAt,
 }) {
   final now = DateTime.now();
   return Note(
@@ -26,6 +27,7 @@ Note _note({
     repeatOccurrenceNumber: repeatOccurrenceNumber,
     pinned: pinned,
     boardId: boardId,
+    reminderHandledAt: reminderHandledAt,
   );
 }
 
@@ -158,6 +160,9 @@ void main() {
 
       expect(result.reminderResolved, isTrue);
       expect(result.reminderAt, reminderAt);
+      // Distinct from updated (see Note.reminderHandledAt's own doc
+      // comment) - ReminderHistoryScreen reads this one specifically.
+      expect(result.reminderHandledAt, isNotNull);
     });
 
     test('a repeating reminder rolls reminderAt forward and stays '
@@ -174,6 +179,9 @@ void main() {
       expect(result.reminderResolved, isFalse);
       expect(result.reminderAt, reminderAt.add(const Duration(days: 1)));
       expect(result.repeatOccurrenceNumber, 2);
+      // A dismiss still counts as "handled" even though this cycle rolls
+      // forward unresolved rather than staying resolved.
+      expect(result.reminderHandledAt, isNotNull);
     });
 
     test('a repeating reminder dismissed several days late skips straight '
@@ -224,6 +232,7 @@ void main() {
       // The reminderAt itself is left as whatever it already was - only
       // reminderResolved/repeatRule change once the rule ends.
       expect(result.reminderAt, reminderAt);
+      expect(result.reminderHandledAt, isNotNull);
     });
   });
 
@@ -402,6 +411,79 @@ void main() {
       final restored = Note.fromPocketBase({'id': 'n1'});
 
       expect(restored.boardId, isNull);
+    });
+  });
+
+  group('Note.reminderHandledAt', () {
+    test('null by default - nothing has been handled yet', () {
+      expect(_note().reminderHandledAt, isNull);
+    });
+
+    test('copyWith sets it independently of other fields', () {
+      final handledAt = DateTime(2026, 10, 11, 18, 31);
+      final note = _note();
+      final handled = note.copyWith(reminderHandledAt: handledAt);
+
+      expect(handled.reminderHandledAt, handledAt);
+      expect(handled.title, note.title);
+    });
+
+    test('round-trips through toMap/fromMap (local storage)', () {
+      final handledAt = DateTime(2026, 10, 11, 18, 31);
+      final note = _note(reminderHandledAt: handledAt);
+
+      final restored = Note.fromMap(note.toMap());
+
+      expect(
+        restored.reminderHandledAt?.millisecondsSinceEpoch,
+        handledAt.millisecondsSinceEpoch,
+      );
+    });
+
+    test('fromMap falls back to null for a note saved before this field '
+        'existed', () {
+      final map = _note(reminderHandledAt: DateTime.now()).toMap()
+        ..remove('reminder_handled_at');
+
+      final restored = Note.fromMap(map);
+
+      expect(restored.reminderHandledAt, isNull);
+    });
+
+    test('round-trips through toPocketBase/fromPocketBase (server sync)', () {
+      final handledAt = DateTime(2026, 10, 11, 18, 31);
+      final note = _note(reminderHandledAt: handledAt);
+
+      final restored = Note.fromPocketBase({
+        'id': note.id,
+        ...note.toPocketBase(),
+      });
+
+      expect(
+        restored.reminderHandledAt?.millisecondsSinceEpoch,
+        handledAt.millisecondsSinceEpoch,
+      );
+    });
+
+    test('an unhandled note serializes reminder_handled_at as an empty '
+        'string, not null, and reads back as null - same convention as '
+        'reminder_at itself', () {
+      final note = _note();
+
+      expect(note.toPocketBase()['reminder_handled_at'], '');
+
+      final restored = Note.fromPocketBase({
+        'id': note.id,
+        'reminder_handled_at': '',
+      });
+      expect(restored.reminderHandledAt, isNull);
+    });
+
+    test('fromPocketBase falls back to null for an un-migrated or '
+        'untouched server record with no reminder_handled_at value', () {
+      final restored = Note.fromPocketBase({'id': 'n1'});
+
+      expect(restored.reminderHandledAt, isNull);
     });
   });
 }

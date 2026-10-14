@@ -226,6 +226,7 @@ void main() {
     // this is the first of two addOrUpdate calls this flow makes.
     expect(host.recorder.saved, hasLength(1));
     expect(host.recorder.saved.single.reminderResolved, isTrue);
+    expect(host.recorder.saved.single.reminderHandledAt, isNotNull);
 
     // Confirm the date picker, then the time picker, each with their
     // pre-filled initial value (same flow as note_editor_screen_test.dart).
@@ -242,5 +243,8 @@ void main() {
     expect(finalSave.reminderAt!.isAfter(DateTime.now()), isTrue);
     // The fresh cycle starts unresolved again - see Note.reminderResolved.
     expect(finalSave.reminderResolved, isFalse);
+    // Still records when the snooze action itself happened, even though
+    // this cycle isn't "resolved."
+    expect(finalSave.reminderHandledAt, isNotNull);
   });
 }

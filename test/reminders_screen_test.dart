@@ -6,6 +6,7 @@ import 'package:jotes/models/repeat_rule.dart';
 import 'package:jotes/providers/notes_provider.dart';
 import 'package:jotes/screens/note_editor_screen.dart';
 import 'package:jotes/screens/notes_screen.dart';
+import 'package:jotes/screens/reminder_history_screen.dart';
 import 'package:jotes/screens/reminders_screen.dart';
 
 /// Same in-memory test double pattern as notes_screen_sync_indicator_test.dart.
@@ -112,6 +113,17 @@ void main() {
 
     expect(find.byType(RemindersScreen), findsOneWidget);
     expect(find.text('Reminders'), findsWidgets);
+  });
+
+  testWidgets('the AppBar has a History button that opens ReminderHistoryScreen', (
+    tester,
+  ) async {
+    await _pumpRemindersScreen(tester, [_note(id: 'a', title: 'Plain note')]);
+
+    await tester.tap(find.byKey(const Key('reminders_history_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ReminderHistoryScreen), findsOneWidget);
   });
 
   testWidgets('shows "No reminders" when nothing has a reminder set', (

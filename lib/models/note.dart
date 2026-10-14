@@ -114,6 +114,16 @@ class Note {
   /// filing a note into a board on one device moves it there everywhere.
   final String? boardId;
 
+  /// When the user last acted on this reminder - Dismiss or Snooze, from
+  /// either the in-app popup/notification action (see reminder_popup.dart,
+  /// handleBackgroundReminderAction) or [noteAfterDismiss]. Distinct from
+  /// [updated], which also bumps on an unrelated edit (title, body, color)
+  /// that has nothing to do with the reminder - see
+  /// ReminderHistoryScreen, the one place this is actually shown, for why
+  /// that distinction matters. Null until the reminder has been acted on
+  /// at least once.
+  final DateTime? reminderHandledAt;
+
   const Note({
     required this.id,
     this.title = '',
@@ -128,6 +138,7 @@ class Note {
     this.repeatOccurrenceNumber = 1,
     this.pinned = false,
     this.boardId,
+    this.reminderHandledAt,
   });
 
   bool get isEmpty => title.isEmpty && body.isEmpty && reminderAt == null;
@@ -145,6 +156,7 @@ class Note {
     int? repeatOccurrenceNumber,
     bool? pinned,
     Object? boardId = _sentinel,
+    Object? reminderHandledAt = _sentinel,
   }) {
     return Note(
       id: id,
@@ -166,6 +178,9 @@ class Note {
       boardId: identical(boardId, _sentinel)
           ? this.boardId
           : boardId as String?,
+      reminderHandledAt: identical(reminderHandledAt, _sentinel)
+          ? this.reminderHandledAt
+          : reminderHandledAt as DateTime?,
     );
   }
 
@@ -182,6 +197,7 @@ class Note {
     'repeat_occurrence_number': repeatOccurrenceNumber,
     'pinned': pinned,
     'board_id': boardId,
+    'reminder_handled_at': reminderHandledAt?.millisecondsSinceEpoch,
   };
 
   factory Note.fromMap(Map<String, dynamic> map) => Note(
@@ -199,6 +215,11 @@ class Note {
     repeatOccurrenceNumber: (map['repeat_occurrence_number'] as int?) ?? 1,
     pinned: (map['pinned'] as bool?) ?? false,
     boardId: map['board_id'] as String?,
+    reminderHandledAt: map['reminder_handled_at'] != null
+        ? DateTime.fromMillisecondsSinceEpoch(
+            map['reminder_handled_at'] as int,
+          )
+        : null,
   );
 
   Map<String, dynamic> toPocketBase() => {
@@ -220,6 +241,7 @@ class Note {
     // rather than requiring an array (see push_subscriptions' own "user"
     // field, set the same way in pb_service.dart).
     'board_id': boardId ?? '',
+    'reminder_handled_at': reminderHandledAt?.toUtc().toIso8601String() ?? '',
   };
 
   factory Note.fromPocketBase(Map<String, dynamic> r) {
@@ -248,6 +270,12 @@ class Note {
       boardId: ((r['board_id'] as String?) ?? '').isEmpty
           ? null
           : r['board_id'] as String,
+      reminderHandledAt: (() {
+        final raw = r['reminder_handled_at'] as String?;
+        return (raw != null && raw.isNotEmpty)
+            ? DateTime.parse(raw).toLocal()
+            : null;
+      })(),
     );
   }
 }
@@ -268,10 +296,15 @@ const Object _sentinel = Object();
 /// notification_service.dart's background one (handleBackgroundReminderAction),
 /// so dismissing a repeating reminder behaves identically from either path.
 Note noteAfterDismiss(Note note) {
+  final now = DateTime.now();
   final reminderAt = note.reminderAt;
   final rule = note.repeatRule;
   if (rule == null || reminderAt == null) {
-    return note.copyWith(reminderResolved: true, updated: DateTime.now());
+    return note.copyWith(
+      reminderResolved: true,
+      updated: now,
+      reminderHandledAt: now,
+    );
   }
 
   final next = nextRuleOccurrence(
@@ -283,14 +316,16 @@ Note noteAfterDismiss(Note note) {
     return note.copyWith(
       reminderResolved: true,
       repeatRule: null,
-      updated: DateTime.now(),
+      updated: now,
+      reminderHandledAt: now,
     );
   }
   return note.copyWith(
     reminderAt: next.reminderAt,
     reminderResolved: false,
     repeatOccurrenceNumber: next.occurrenceNumber,
-    updated: DateTime.now(),
+    updated: now,
+    reminderHandledAt: now,
   );
 }
 

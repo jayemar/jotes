@@ -6,6 +6,7 @@ import '../providers/notes_provider.dart';
 import '../providers/reminders_view_provider.dart';
 import '../widgets/reminder_popup.dart';
 import 'note_editor_screen.dart';
+import 'reminder_history_screen.dart';
 
 final _timeFormat = DateFormat('MMM d, h:mm a');
 
@@ -104,6 +105,15 @@ class RemindersScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Reminders'),
         actions: [
+          IconButton(
+            key: const Key('reminders_history_button'),
+            icon: const Icon(Icons.history),
+            tooltip: 'History',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ReminderHistoryScreen()),
+            ),
+          ),
           PopupMenuButton<ReminderRecurrenceFilter>(
             key: const Key('reminders_recurrence_filter'),
             icon: Icon(_recurrenceFilterIcon(viewState.recurrenceFilter)),

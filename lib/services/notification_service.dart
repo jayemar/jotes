@@ -629,10 +629,12 @@ Future<void> handleBackgroundReminderAction(
 
     final newReminderAt = await SnoozeSettings.instance.resolveNext();
 
+    final snoozedAt = DateTime.now();
     final updated = note.copyWith(
       reminderAt: newReminderAt,
       reminderResolved: false,
-      updated: DateTime.now(),
+      updated: snoozedAt,
+      reminderHandledAt: snoozedAt,
     );
     await DbService.instance.upsert(updated);
     await NotificationService.instance.schedule(updated);
