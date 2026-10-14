@@ -33,7 +33,17 @@ Future<void> mergeSync() async {
   // otherwise briefly reference one DbService doesn't have yet (harmless
   // in practice, since nothing reads it before this function returns, but
   // keeping cause before effect here avoids relying on that).
-  await _mergeBoards();
+  try {
+    await _mergeBoards();
+  } catch (_) {
+    // Not fatal - same reasoning as SnoozeSettings above. In particular,
+    // a server that hasn't yet been migrated for the "boards" collection
+    // (see the PocketBase migrations in homelab/pocketbase) would 404
+    // here on every sync; without this guard that exception propagated
+    // straight out of mergeSync and skipped the notes merge below
+    // entirely - silently breaking cross-device note sync (including
+    // reminder dismissals) rather than just leaving boards unsynced.
+  }
 
   final local = await DbService.instance.getAll();
   final localById = {for (final n in local) n.id: n};
