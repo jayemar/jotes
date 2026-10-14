@@ -242,8 +242,70 @@ void main() {
 
     expect(repeatingTile.trailing, isNotNull);
     expect(onceTile.trailing, isNull);
-    expect(find.byIcon(Icons.repeat), findsOneWidget);
+    // Scoped to the row itself, not a bare find.byIcon - the AppBar's own
+    // recurrence filter button also renders an Icons.repeat as part of
+    // its "All" combined icon (see _CombinedFilterIcon).
+    expect(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('Repeating'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byIcon(Icons.repeat),
+      ),
+      findsOneWidget,
+    );
   });
+
+  testWidgets(
+    'the recurrence filter button shows both its repeating and '
+    'single-fire sub-icons while set to "All", not a generic funnel - '
+    'so it reads differently from the status filter button sitting right '
+    'next to it',
+    (tester) async {
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'a',
+          title: 'A note',
+          reminderAt: DateTime.now().add(const Duration(hours: 1)),
+        ),
+      ]);
+
+      final button = find.byKey(const Key('reminders_recurrence_filter'));
+      expect(
+        find.descendant(of: button, matching: find.byIcon(Icons.repeat)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: button, matching: find.byIcon(Icons.filter_1)),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'the status filter button shows both the unhandled and upcoming row '
+    'icons while set to "All"',
+    (tester) async {
+      await _pumpRemindersScreen(tester, [
+        _note(
+          id: 'a',
+          title: 'A note',
+          reminderAt: DateTime.now().add(const Duration(hours: 1)),
+        ),
+      ]);
+
+      final button = find.byKey(const Key('reminders_status_filter'));
+      expect(
+        find.descendant(of: button, matching: find.byIcon(Icons.alarm_off)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: button, matching: find.byIcon(Icons.alarm)),
+        findsOneWidget,
+      );
+    },
+  );
 
   group('the recurrence filter', () {
     testWidgets(

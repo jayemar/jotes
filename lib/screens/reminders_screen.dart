@@ -10,24 +10,60 @@ import 'reminder_history_screen.dart';
 
 final _timeFormat = DateFormat('MMM d, h:mm a');
 
+/// Two of a filter's own other icons shown side by side, full-size rather
+/// than cropped in half, for that filter's "All"/no-narrowing option - so
+/// the button itself reads as "both of these" instead of a generic funnel
+/// that looks identical to every other filter button on this screen once
+/// each is at its own "All". Deliberately built from the exact icons the
+/// filter's other two options already use (see _recurrenceFilterIcon/
+/// _statusFilterIcon below), not a third, unrelated glyph.
+class _CombinedFilterIcon extends StatelessWidget {
+  final IconData left;
+  final IconData right;
+
+  const _CombinedFilterIcon({required this.left, required this.right});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = IconTheme.of(context).color;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(left, size: 18, color: color),
+        const SizedBox(width: 2),
+        Icon(right, size: 18, color: color),
+      ],
+    );
+  }
+}
+
 /// Icon for the AppBar's own recurrence filter button, reflecting the
 /// current [ReminderRecurrenceFilter] - same reasoning as notes_screen.dart's
 /// own _reminderVisibilityIcon, a glance at the button alone should already
 /// hint at what's currently hidden.
-IconData _recurrenceFilterIcon(ReminderRecurrenceFilter filter) =>
+Widget _recurrenceFilterIcon(ReminderRecurrenceFilter filter) =>
     switch (filter) {
-      ReminderRecurrenceFilter.all => Icons.filter_list,
-      ReminderRecurrenceFilter.recurringOnly => Icons.repeat,
-      ReminderRecurrenceFilter.singleFireOnly => Icons.filter_1,
+      ReminderRecurrenceFilter.all => const _CombinedFilterIcon(
+        left: Icons.repeat,
+        right: Icons.filter_1,
+      ),
+      ReminderRecurrenceFilter.recurringOnly => const Icon(Icons.repeat),
+      ReminderRecurrenceFilter.singleFireOnly => const Icon(Icons.filter_1),
     };
 
 /// Icon for the AppBar's own status filter button - alarm_off (this list's
 /// own icon for an overdue/unhandled row, see the trailing leading icon
 /// below) when only unhandled reminders are shown, so the button's icon
-/// already looks like the rows it's narrowing down to.
-IconData _statusFilterIcon(ReminderStatusFilter filter) => switch (filter) {
-  ReminderStatusFilter.all => Icons.filter_list,
-  ReminderStatusFilter.unhandledOnly => Icons.alarm_off,
+/// already looks like the rows it's narrowing down to. "All" pairs that
+/// with alarm (the same list's own icon for an upcoming row), rather than
+/// a generic funnel - together they're the two row icons this filter
+/// chooses between.
+Widget _statusFilterIcon(ReminderStatusFilter filter) => switch (filter) {
+  ReminderStatusFilter.all => const _CombinedFilterIcon(
+    left: Icons.alarm_off,
+    right: Icons.alarm,
+  ),
+  ReminderStatusFilter.unhandledOnly => const Icon(Icons.alarm_off),
 };
 
 /// Long-pressing a row offers Delete - removing the note entirely (not
@@ -116,7 +152,7 @@ class RemindersScreen extends ConsumerWidget {
           ),
           PopupMenuButton<ReminderRecurrenceFilter>(
             key: const Key('reminders_recurrence_filter'),
-            icon: Icon(_recurrenceFilterIcon(viewState.recurrenceFilter)),
+            icon: _recurrenceFilterIcon(viewState.recurrenceFilter),
             tooltip: 'Filter by recurrence',
             onSelected: (selected) => ref
                 .read(remindersViewProvider.notifier)
@@ -138,7 +174,7 @@ class RemindersScreen extends ConsumerWidget {
           ),
           PopupMenuButton<ReminderStatusFilter>(
             key: const Key('reminders_status_filter'),
-            icon: Icon(_statusFilterIcon(viewState.statusFilter)),
+            icon: _statusFilterIcon(viewState.statusFilter),
             tooltip: 'Filter by status',
             onSelected: (selected) => ref
                 .read(remindersViewProvider.notifier)
